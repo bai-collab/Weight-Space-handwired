@@ -121,13 +121,23 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
           </div>
         </div>
         <div class="bar">
+          <span class="note">搜尋方法</span>
+          <div class="seg" role="group" aria-label="搜尋方法">
+            <button aria-pressed="false" data-method="fd">逐關節試探</button>
+            <button aria-pressed="true" data-method="gd">梯度下降</button>
+          </div>
+        </div>
+        <div class="bar">
           <button class="chip" id="target">產生隨機目標</button>
           <button class="primary" id="solve" disabled>開始反推</button>
           <button class="chip" id="compare" disabled>三種依據比較</button>
+          <button class="chip" id="compare-m" disabled>兩種方法比較</button>
         </div>
         <div class="stat" id="fitstat">尚未設定目標</div>
         <div class="tbl" id="cmptbl"></div>
         <div class="tbl" id="errtbl"></div>
+        <canvas id="curve" width="560" height="90" style="aspect-ratio:560/90;image-rendering:auto" aria-label="損失曲線"></canvas>
+        <p class="note"><b>梯度下降</b>：把像素邊緣改成平滑的機率（邊緣寬度從 6 px 逐步收窄到 0.5 px），遮擋用依深度加權的軟混合。損失對 22 個角度的梯度用解析式算：像素 → 形狀邊界與深度 → 投影端點 → 運動鏈雅可比（旋轉軸 × 力臂），再用 Adam 更新 150 步（從 3 個起點各跑一次）；最後用小步長逐關節試探收尾。</p>
         <p class="note">目標以橘色虛線輪廓疊在兩張圖上。損失＝各骨頭像素重心與目標的距離平方和，加上少量部位標籤不符的像素數；雙視角就是兩張圖的損失相加。搜尋從損失最低的預設姿勢出發，逐關節有限差分（步長 32° → 1°），再隨機擾動重來 5 輪，跳出局部最小值。評分以 3D 關節位置誤差為主，因為不同角度組合可能擺出同一個姿勢。</p>
       </div>
     </section>
@@ -180,22 +190,23 @@ const sub = (a, b) => [a[0]-b[0], a[1]-b[1], a[2]-b[2]], add = (a, b) => [a[0]+b
 // ---------- L3：3D 前向運動學 ----------
 function fk(pose, ground) {
   const build = dy => {
-    const R = [], P = [];
+    const R = [], P = [], AX = [];
     JOINTS.forEach((j, i) => {
       const f = DOF[j.k + '.f'], a = DOF[j.k + '.a'];
       const tf = f ? clampR(pose[f.id] ?? 0, ...f.lim) * f.s * DEG : 0;
       const ta = a ? clampR(pose[a.id] ?? 0, ...a.lim) * a.s * DEG : 0;
-      const L = m3(Rz(ta), Rx(tf));
+      const L = m3(Rz(ta), Rx(tf)), Rp = j.p ? R[IDX[j.p]] : I3;
       if (!j.p) { R[i] = L; P[i] = add(j.P, [0, dy, 0]); }
       else { const pi = IDX[j.p]; R[i] = m3(R[pi], L); P[i] = add(P[pi], mv(R[pi], sub(j.P, JOINTS[pi].P))); }
+      AX[i] = {f: mv(m3(Rp, Rz(ta)), [1, 0, 0]), a: mv(Rp, [0, 0, 1])};   // 世界座標下的旋轉軸（給梯度用）
     });
-    return {R, P};
+    return {R, P, AX, dy};
   };
   let T = build(0);
   if (ground) {   // 地面約束：最低的腳底點貼地
-    let low = -Infinity;
-    for (const s of SHAPES) if (s.foot) for (const e of [s.A, s.B]) low = Math.max(low, toWorld(T, s.bone, e)[1] + s.ra);
-    T = build(GROUND - low);
+    let low = -Infinity, lowPt = null;
+    for (const s of SHAPES) if (s.foot) for (const e of [s.A, s.B]) { const y = toWorld(T, s.bone, e)[1] + s.ra; if (y > low) { low = y; lowPt = {bone: s.bone, X: e}; } }
+    T = build(GROUND - low); T.lowPt = lowPt;
   }
   return T;
 }
@@ -486,7 +497,7 @@ const errStats = pose => {
 };
 function updateFitUI(text) {
   const busy = state.solving;
-  $('solve').disabled = !state.target || busy; $('compare').disabled = !state.target || busy; $('target').disabled = busy;
+  $('solve').disabled = !state.target || busy; $('compare').disabled = !state.target || busy; $('compare-m').disabled = !state.target || busy; $('target').disabled = busy;
   if (text !== undefined) $('fitstat').innerHTML = text;
 }
 document.querySelectorAll('[data-src]').forEach(b => b.addEventListener('click', () => {
@@ -506,7 +517,7 @@ $('target').onclick = () => {
   updateFitUI(`目標已設定（兩張圖的不符像素 <b>${lossOf(state.pose, 'both').mis}</b>）`);
 };
 const tick = () => new Promise(r => setTimeout(r, 0));
-async function solve(src, label) {
+async function solveFD(src, label) {
   // 起點：從各預設姿勢中挑損失最低的
   let pose = null, best = Infinity, it = 0;
   for (const P of Object.values(PRESETS)) { const L = lossOf(P, src).L; it++; if (L < best) { best = L; pose = {...P}; } }
@@ -546,12 +557,202 @@ function errTable(pose) {
   $('errtbl').innerHTML = `<table><thead><tr><th>自由度</th><th>真值</th><th>反推</th><th>誤差</th></tr></thead><tbody>` +
     DOFS.map((d, i) => `<tr><td>${JOINTS[IDX[d.k]].g}・${d.n.includes('・') ? d.n : JOINTS[IDX[d.k]].n + '・' + d.n}</td><td>${state.target.truth[d.id] ?? 0}°</td><td>${Math.round(pose[d.id] ?? 0)}°</td><td>${e[i]}°</td></tr>`).join('') + '</tbody></table>';
 }
+
+// ---------- 第 2 項：軟渲染 + 解析梯度 + Adam ----------
+const ND = DOFS.length, DOFJ = DOFS.map(d => IDX[d.k]);
+const cross = (a, b) => [a[1]*b[2] - a[2]*b[1], a[2]*b[0] - a[0]*b[2], a[0]*b[1] - a[1]*b[0]];
+const ANC = JOINTS.map((j, b) => { const set = new Set(); let k = b; while (k != null) { set.add(k); k = JOINTS[k].p ? IDX[JOINTS[k].p] : null; } return set; });
+// 運動鏈雅可比：點 X（屬於骨頭 b）對每個自由度的 3D 導數 = 旋轉軸 × 力臂（每度）
+function jac3(T, b, Xw) {
+  const J = new Float64Array(ND * 3);
+  for (let d = 0; d < ND; d++) {
+    const j = DOFJ[d]; if (!ANC[b].has(j)) continue;
+    const c = cross(T.AX[j][DOFS[d].ax], sub(Xw, T.P[j])), k = DOFS[d].s * DEG;
+    J[d*3] = c[0] * k; J[d*3+1] = c[1] * k; J[d*3+2] = c[2] * k;
+  }
+  if (T.G) for (let d = 0; d < ND; d++) J[d*3+1] += T.G[d];   // 地面約束：整個人一起上下移
+  return J;
+}
+const depthJ = (view, J3) => { const J = new Float64Array(ND), ix = view === 'side' ? 0 : 2; for (let d = 0; d < ND; d++) J[d] = J3[d*3+ix]; return J; };
+const proj2 = (view, J3) => { const J = new Float64Array(ND * 2), ix = view === 'side' ? 2 : 0;
+  for (let d = 0; d < ND; d++) { J[d*2] = J3[d*3+ix]; J[d*2+1] = J3[d*3+1]; } return J; };
+function fkGrad(pose, ground) {
+  const T = fk(pose, ground);
+  if (ground && T.lowPt) {   // dy = GROUND − 最低腳底點 → d(dy)/dθ = −d(腳底 y)/dθ
+    const J = jac3(T, T.lowPt.bone, toWorld(T, T.lowPt.bone, T.lowPt.X));
+    T.G = new Float64Array(ND); for (let d = 0; d < ND; d++) T.G[d] = -J[d*3+1];
+  }
+  return T;
+}
+// 單一視角的軟損失與梯度。佔有率 o = σ(有號距離 / τ)；
+// 每像素：背景機率 A = Π(1 − o)，前景依深度權重 e = exp(z / γ) 分配給各骨頭
+function softView(view, T, tg, tau, grad) {
+  const V = VIEW[view], zoff = view === 'side' ? 40 : 0, gam = 2.5, N = W * H;
+  const head = new Int32Array(N).fill(-1), nxt = [], E = [];   // E: [像素, 骨頭, o, e, 形狀序號, gx, gy, (gx2, gy2)]
+  const geo = [];
+  for (const s of SHAPES) {
+    const gi = geo.length;
+    if (s.kind === 'cap') {
+      const Aw = toWorld(T, s.bone, s.A), Bw = toWorld(T, s.bone, s.B), a = V.proj(Aw), b = V.proj(Bw);
+      const da = V.depth(Aw) - zoff, db = V.depth(Bw) - zoff, r = Math.max(s.ra, s.rb) + 4 * tau;
+      const JA = jac3(T, s.bone, Aw), JB = jac3(T, s.bone, Bw);
+      geo.push({cap: true, Ja: proj2(view, JA), Jb: proj2(view, JB), Jza: depthJ(view, JA), Jzb: depthJ(view, JB), ga: [0, 0], gb: [0, 0], gza: 0, gzb: 0});
+      const bx = b[0] - a[0], by = b[1] - a[1], L2 = bx*bx + by*by;
+      const x0 = Math.max(0, Math.floor(Math.min(a[0], b[0]) - r)), x1 = Math.min(W - 1, Math.ceil(Math.max(a[0], b[0]) + r));
+      const y0 = Math.max(0, Math.floor(Math.min(a[1], b[1]) - r)), y1 = Math.min(H - 1, Math.ceil(Math.max(a[1], b[1]) + r));
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+        const px = x + 0.5 - a[0], py = y + 0.5 - a[1];
+        const h = L2 > 1e-6 ? Math.min(1, Math.max(0, (px*bx + py*by) / L2)) : 0;
+        const ox = px - h*bx, oy = py - h*by, d = Math.hypot(ox, oy), rr = s.ra + (s.rb - s.ra) * h, sd = rr - d;
+        if (sd < -4 * tau) continue;
+        const o = 1 / (1 + Math.exp(-sd / tau)), z = da + (db - da) * h + Math.sqrt(Math.max(0, rr*rr - d*d));
+        const nx = d > 1e-6 ? ox / d : 0, ny = d > 1e-6 ? oy / d : 0, i = y*W + x;
+        nxt.push(head[i]); head[i] = E.length;
+        E.push([i, s.bone, o, Math.exp(z / gam), gi, (1 - h) * nx, (1 - h) * ny, h * nx, h * ny, h]);
+      }
+    } else {
+      const C = toWorld(T, s.bone, s.C), c = V.proj(C), dc = V.depth(C) - zoff, R = T.R[s.bone];
+      const Sg = m3(m3(R, [s.r[0]**2, 0, 0, 0, s.r[1]**2, 0, 0, 0, s.r[2]**2]), [R[0], R[3], R[6], R[1], R[4], R[7], R[2], R[5], R[8]]);
+      const ix = view === 'side' ? 2 : 0, m00 = Sg[ix*3+ix], m01 = Sg[ix*3+1], m11 = Sg[4], det = m00*m11 - m01*m01;
+      const i00 = m11 / det, i01 = -m01 / det, i11 = m00 / det, rd = Math.sqrt(view === 'side' ? Sg[0] : Sg[8]);
+      const r = Math.sqrt(Math.max(m00, m11)) + 4 * tau;
+      const JC = jac3(T, s.bone, C);
+      geo.push({cap: false, Jc: proj2(view, JC), Jzc: depthJ(view, JC), gc: [0, 0], gzc: 0});
+      const x0 = Math.max(0, Math.floor(c[0] - r)), x1 = Math.min(W - 1, Math.ceil(c[0] + r));
+      const y0 = Math.max(0, Math.floor(c[1] - r)), y1 = Math.min(H - 1, Math.ceil(c[1] + r));
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+        const vx = x + 0.5 - c[0], vy = y + 0.5 - c[1], Q = vx*vx*i00 + 2*vx*vy*i01 + vy*vy*i11, dist = Math.hypot(vx, vy);
+        const rho = dist > 1e-6 ? dist / Math.sqrt(Q) : Math.sqrt(Math.min(m00, m11)), sd = rho - dist;
+        if (sd < -4 * tau) continue;
+        const o = 1 / (1 + Math.exp(-sd / tau)), z = dc + Math.sqrt(Math.max(0, 1 - Q)) * rd, i = y*W + x;
+        nxt.push(head[i]); head[i] = E.length;
+        E.push([i, s.bone, o, Math.exp(z / gam), gi, dist > 1e-6 ? vx / dist : 0, dist > 1e-6 ? vy / dist : 0]);   // ∂sd/∂c
+      }
+    }
+  }
+  let L = 0;
+  const Wb = new Float64Array(JOINTS.length), touched = [];
+  for (let i = 0; i < N; i++) {
+    const t = tg[i];
+    if (head[i] < 0) { if (t >= 0) L += 2; continue; }
+    let A = 1, S = 0; touched.length = 0;
+    for (let k = head[i]; k >= 0; k = nxt[k]) {
+      const [, b, o, e] = E[k]; A *= 1 - Math.min(o, 0.999); S += o * e;
+      if (!Wb[b]) touched.push(b); Wb[b] += o * e;
+    }
+    const tbg = t < 0 ? 1 : 0, rA = 2 * (A - tbg);
+    L += (A - tbg) ** 2;
+    let sumRP = 0;   // Σ_b 2(P_b − t_b)·W_b
+    const R = {};
+    for (const b of touched) { const P = (1 - A) * Wb[b] / S, r2 = 2 * (P - (b === t ? 1 : 0)); L += (P - (b === t ? 1 : 0)) ** 2; R[b] = r2; sumRP += r2 * Wb[b]; }
+    if (t >= 0 && !Wb[t]) L += 1;
+    for (let k = head[i]; k >= 0; k = nxt[k]) {
+      const en = E[k], [, b, o, e, gi] = en, oc = Math.min(o, 0.999);
+      const dA = -A / (1 - oc);
+      // ∂P_b/∂o = −dA·W_b/S + (1−A)·e·([b=bs]·S − W_b)/S²
+      const G = rA * dA + (-dA / S) * sumRP + (1 - A) * e * (R[b] * S - sumRP) / (S * S);
+      const g = G * o * (1 - o) / tau, gg = geo[gi];
+      // 深度權重的梯度：∂L/∂e = (1−A)·o·(r_bs·S − Σ r_b W_b)/S²，∂e/∂z = e/γ
+      const gz = (1 - A) * o * (R[b] * S - sumRP) / (S * S) * e / gam;
+      if (gg.cap) { gg.ga[0] += g * en[5]; gg.ga[1] += g * en[6]; gg.gb[0] += g * en[7]; gg.gb[1] += g * en[8]; gg.gza += gz * (1 - en[9]); gg.gzb += gz * en[9]; }
+      else { gg.gc[0] += g * en[5]; gg.gc[1] += g * en[6]; gg.gzc += gz; }
+    }
+    for (const b of touched) Wb[b] = 0;
+  }
+  // 端點與中心的 2D 梯度 → 雅可比 → 角度梯度（∂sd/∂端點，再乘上端點對角度的導數）
+  for (const g of geo) {
+    if (g.cap) for (let d = 0; d < ND; d++) grad[d] += g.ga[0]*g.Ja[d*2] + g.ga[1]*g.Ja[d*2+1] + g.gb[0]*g.Jb[d*2] + g.gb[1]*g.Jb[d*2+1] + g.gza*g.Jza[d] + g.gzb*g.Jzb[d];
+    else for (let d = 0; d < ND; d++) grad[d] += g.gc[0]*g.Jc[d*2] + g.gc[1]*g.Jc[d*2+1] + g.gzc*g.Jzc[d];   // ∂sd/∂c = (p − c)/|p − c|
+  }
+  return L;
+}
+function softLoss(pose, src, tau, grad) {
+  const T = fkGrad(pose, $('t-ground').checked); let L = 0;
+  for (const v of views(src)) L += softView(v, T, state.target.lab[v], tau, grad);
+  return L;
+}
+function drawCurve(hist) {
+  const cv = $('curve'), ctx = cv.getContext('2d'), css = getComputedStyle(document.documentElement);
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  if (hist.length < 2) return;
+  const lo = Math.min(...hist), hi = Math.max(...hist);
+  ctx.strokeStyle = css.getPropertyValue('--line').trim(); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, cv.height - 0.5); ctx.lineTo(cv.width, cv.height - 0.5); ctx.stroke();
+  ctx.strokeStyle = css.getPropertyValue('--accent').trim(); ctx.lineWidth = 2; ctx.beginPath();
+  hist.forEach((v, i) => { const x = i / (hist.length - 1) * (cv.width - 4) + 2, y = 6 + (1 - (v - lo) / (hi - lo || 1)) * (cv.height - 12); i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.stroke();
+  ctx.fillStyle = css.getPropertyValue('--muted').trim(); ctx.font = '12px ' + css.getPropertyValue('--f-mono');
+  ctx.fillText('軟損失 ' + hist[hist.length - 1].toFixed(0), 6, 14);
+}
+let TAU0 = 6;
+async function solveGD(src, label, iters = 150) {
+  // 起點：損失最低的三個預設姿勢各跑一次，留下較好的
+  const starts = Object.values(PRESETS).map(P => ({P, L: lossOf(P, src).L})).sort((a, b) => a.L - b.L).slice(0, 3);
+  let bestPose = null, bestL = Infinity, it = 0;
+  for (const [si, st] of starts.entries()) {
+    const pose = {...st.P}; DOFS.forEach(d => pose[d.id] = clampR(pose[d.id] ?? 0, ...d.lim));
+    state.pose = pose;
+    const m = new Float64Array(ND), v = new Float64Array(ND), hist = [];
+    for (let k = 1; k <= iters; k++) {
+      const f = (k - 1) / (iters - 1), tau = TAU0 * Math.pow(0.5 / TAU0, f), lr = 5 * Math.pow(0.1, f);   // 由粗到細
+      const g = new Float64Array(ND), L = softLoss(pose, src, tau, g); it++;
+      for (let d = 0; d < ND; d++) {   // Adam
+        m[d] = 0.9 * m[d] + 0.1 * g[d]; v[d] = 0.999 * v[d] + 0.001 * g[d] * g[d];
+        const mh = m[d] / (1 - 0.9 ** k), vh = v[d] / (1 - 0.999 ** k), D = DOFS[d];
+        pose[D.id] = clampR((pose[D.id] ?? 0) - lr * mh / (Math.sqrt(vh) + 1e-8), ...D.lim);
+      }
+      hist.push(L);
+      if (k % 10 === 0 || k === iters) {
+        syncSliders(); drawAll(); drawCurve(hist);
+        updateFitUI(`${label}・梯度下降・起點 ${si + 1}/3・第 ${k} 步・邊緣寬 ${tau.toFixed(2)} px`);
+        await tick();
+      }
+    }
+    const Ld = lossOf(pose, src).L;
+    if (Ld < bestL) { bestL = Ld; bestPose = {...pose}; }
+  }
+  // 收尾：梯度在像素尺度會被離散化打斷，最後用小步長（4° → 1°）逐關節試探微調
+  const pose = bestPose; let best = lossOf(pose, src).L;
+  for (const step of [4, 2, 1]) {
+    let improved = true;
+    while (improved) {
+      improved = false;
+      for (const D of DOFS) for (const dd of [step, -step]) {
+        const old = pose[D.id] ?? 0, nv = clampR(old + dd, ...D.lim); if (nv === old) continue;
+        pose[D.id] = nv; const L = lossOf(pose, src).L; it++;
+        if (L < best) { best = L; improved = true; break; } else pose[D.id] = old;
+      }
+    }
+    state.pose = pose; syncSliders(); drawAll(); updateFitUI(`${label}・收尾微調・步長 ${step}°`); await tick();
+  }
+  return {pose, it, ...errStats(pose)};
+}
+async function solve(src, label) {
+  const t0 = performance.now(), r = state.method === 'fd' ? await solveFD(src, label) : await solveGD(src, label);
+  return {...r, ms: performance.now() - t0};
+}
+state.method = 'gd';
+document.querySelectorAll('[data-method]').forEach(b => b.addEventListener('click', () => {
+  state.method = b.dataset.method; document.querySelectorAll('[data-method]').forEach(x => x.setAttribute('aria-pressed', x === b));
+}));
+$('compare-m').onclick = async () => {
+  stopAnim(); state.solving = true; updateFitUI(); $('errtbl').innerHTML = '';
+  const keep = state.method, res = {};
+  for (const [m, name] of [['fd', '逐關節試探'], ['gd', '梯度下降']]) { state.method = m; res[name] = await solve(state.src, name); }
+  state.method = keep; state.solving = false;
+  const lo = k => Math.min(...Object.values(res).map(r => r[k])), cls = (r, k) => r[k] === lo(k) ? 'best' : '';
+  $('cmptbl').innerHTML = `<table><thead><tr><th>方法（${SRCNAME[state.src]}）</th><th>關節位置平均</th><th>關節位置最大</th><th>角度平均</th><th>評估次數</th><th>時間</th></tr></thead><tbody>` +
+    Object.entries(res).map(([k, r]) => `<tr><td>${k}</td><td class="${cls(r, 'pmean')}">${r.pmean.toFixed(1)} px</td><td class="${cls(r, 'pmax')}">${r.pmax.toFixed(1)} px</td><td class="${cls(r, 'mean')}">${r.mean.toFixed(1)}°</td><td>${r.it}</td><td class="${cls(r, 'ms')}">${(r.ms / 1000).toFixed(1)} s</td></tr>`).join('') + '</tbody></table>';
+  const g = res['梯度下降']; state.pose = {...g.pose}; syncSliders(); drawAll(); errTable(g.pose);
+  updateFitUI('比較完成；畫面與下表顯示梯度下降的結果');
+};
+
 const SRCNAME = {front: '只看正面', side: '只看側面', both: '雙視角'};
 $('solve').onclick = async () => {
   stopAnim(); state.solving = true; updateFitUI();
   const r = await solve(state.src, SRCNAME[state.src]);
   state.solving = false;
-  updateFitUI(`完成（${SRCNAME[state.src]}）：評估 <b>${r.it}</b> 次，關節位置平均誤差 <b>${r.pmean.toFixed(1)} px</b>（最大 ${r.pmax.toFixed(1)}），角度平均誤差 <b>${r.mean.toFixed(1)}°</b>`);
+  updateFitUI(`完成（${SRCNAME[state.src]}・${state.method === 'gd' ? '梯度下降' : '逐關節試探'}・${(r.ms / 1000).toFixed(1)} s）：評估 <b>${r.it}</b> 次，關節位置平均誤差 <b>${r.pmean.toFixed(1)} px</b>（最大 ${r.pmax.toFixed(1)}），角度平均誤差 <b>${r.mean.toFixed(1)}°</b>`);
   errTable(r.pose);
 };
 $('compare').onclick = async () => {
