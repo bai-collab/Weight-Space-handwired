@@ -287,7 +287,7 @@ const LPC_BASE = {hy: 24.4, hz: -0.3, hr: [22, 17.5, 20], cy: 28.6, cz: 1.2, cr:
 const LPC_SHAPE = {
   male: {},
   female: {hz: 0.2, cy: 30.6, tz: -0.5, tr: [21, 19, 18], sr: [18.5, 5.5, 10], hr: [21, 18.5, 20], shx: 8.5, hipx: 5.5, leg: 1.05, arm: 0.8},
-  muscular: {hz: 0.2, cz: 0.2, cy: 30.6, tz: -2, tr: [31, 25, 21], sr: [22.5, 5.5, 17], hr: [21, 18.5, 20], leg: 1.1, arm: 0.85},
+  muscular: {hy: 24.9, hz: 0.2, cy: 30.6, tz: -1, tr: [31, 23, 21], sr: [22.5, 5.5, 16], hr: [21, 18.5, 20], leg: 1.05, arm: 0.95},   // 用走路、施法、揮砍各幾格一起校正
   teen: {hy: 24.9, hz: 0.2, cy: 30.6, tz: -0.5, tr: [21, 19, 18], sr: [20.5, 5.5, 10], hr: [21, 19.5, 20], shx: 8.5, hipx: 5.5, arm: 0.8},
   fsmall: {hy: 25.4, hz: 0.7, cy: 30.1, tz: -0.5, tr: [21, 20, 18], sr: [14.5, 5.5, 11], hr: [18, 15.5, 18], shx: 6.5, hipx: 6, leg: 1.05, arm: 0.65, pr: [17, 6, 16]},
 };
@@ -574,7 +574,7 @@ const views = src => src === 'both' ? ['front', 'side'] : [src];
 const PRIOR = Object.fromEntries(DOFS.map(d => [d.id, {mu: /El|Kn/.test(d.k) ? 10 : 0,
   sig: d.k === 'head' ? 12 : d.k === 'pelvis' ? 8 : d.k === 'chest' ? 15 : /El|Kn/.test(d.k) ? 30 : /Sh/.test(d.k) && d.ax === 'f' ? 35 : 25}]));
 // 走路循環時再加「與上一格相近」的平滑項（σ = 20°）
-const SMOOTH_SIG = 20;
+let SMOOTH_SIG = 20;   // 揮砍、施法的動作變化快，放寬到 45°（見 applyActPrior）
 const priorCost = pose => DOFS.reduce((a, d) => a + (((pose[d.id] ?? 0) - PRIOR[d.id].mu) / PRIOR[d.id].sig) ** 2
   + (state.prevPose ? (((pose[d.id] ?? 0) - (state.prevPose[d.id] ?? 0)) / SMOOTH_SIG) ** 2 : 0), 0);
 const PRIOR_K = 160;   // 1 個標準差 ≈ 8 個不吻合像素
@@ -972,6 +972,7 @@ function renderThumbs() {
 // 揮砍、施法會把手舉高：放寬肩、肘的自然姿勢先驗，否則手舉不起來
 function applyActPrior() {
   const walk = lpcAct().k === 'walk';
+  SMOOTH_SIG = walk ? 20 : 45;
   for (const d of DOFS) {
     if (/Sh/.test(d.k)) PRIOR[d.id].sig = d.ax === 'f' ? (walk ? 35 : 90) : (walk ? 25 : 70);
     if (/El/.test(d.k)) PRIOR[d.id].sig = walk ? 30 : 60;

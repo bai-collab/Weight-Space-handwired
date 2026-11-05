@@ -175,7 +175,7 @@ node examples/sprite-arm-chain.mjs
 
 ### 6.1 第 3 項：接上 LPC 影格
 
-- **素材**：LPC 男性基本角色（身體＋頭）的走路影格，正面朝下、側面朝右，各 9 格，合成為 `examples/assets/lpc-walk.png`。作者與授權見 `examples/assets/LPC-CREDITS.md`（CC-BY-SA 3.0／GPL 3.0）。本環境連不到 OpenGameArt，所以改從 Universal LPC Spritesheet Character Generator 的 GitHub 鏡像取得。
+- **素材**：LPC 男性基本角色（身體＋頭）的走路影格，正面朝下、側面朝右，各 9 格；現在收在 `examples/assets/lpc-atlas.png` 的第 1 組（見 6.4）。作者與授權見 `examples/assets/LPC-CREDITS.md`。本環境連不到 OpenGameArt，所以改從 Universal LPC Spritesheet Character Generator 的 GitHub 鏡像取得。
 - **LPC 體型**：依站姿影格量出比例（身高約 47 px、頭約佔 1/3、腿只有 11 px），放大 2 倍；腿用前後兩顆膠囊做出「正面窄、側面厚」的截面。
   - 校正前，站姿的輪廓重疊率（IoU）是正面 82%、側面 68%；校正後不必反推就有 89%、88%。
 - **損失**：LPC 只有輪廓，所以改用前景 / 背景的輪廓損失，並加上兩項：
