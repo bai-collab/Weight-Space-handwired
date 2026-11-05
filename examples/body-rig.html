@@ -61,6 +61,9 @@ input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
 button.primary { font: 600 13px var(--f-body); background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 4px; padding: 6px 14px; cursor: pointer; }
 button:disabled { opacity: .5; cursor: default; }
 .tbl { overflow-x: auto; }
+.thumb { padding: 2px; border: 1px solid var(--line); border-radius: 4px; background: var(--stage); cursor: pointer; display: grid; gap: 1px; justify-items: center; color: var(--stage-ink); font: 11px var(--f-mono); }
+.thumb canvas { width: 32px; height: 32px; aspect-ratio: 1; }
+.thumb[aria-pressed="true"] { border-color: var(--accent); outline: 2px solid var(--accent); }
 table { border-collapse: collapse; font: 12px var(--f-mono); font-variant-numeric: tabular-nums; min-width: 100%; }
 th, td { padding: 3px 10px 3px 0; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
 th:first-child, td:first-child { text-align: left; }
@@ -109,6 +112,28 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
       </div>
       <h2>關節角度</h2>
       <div class="joints" id="joints"></div>
+
+      <div class="fit" id="lpc-sec">
+        <h2>LPC 影格 <span>從畫師畫的走路動畫反推關節角度</span></h2>
+        <div class="bar">
+          <span class="note">體型</span>
+          <div class="seg" role="group" aria-label="體型">
+            <button aria-pressed="true" data-body="real">寫實</button>
+            <button aria-pressed="false" data-body="lpc">LPC</button>
+          </div>
+          <label class="toggles"><input id="t-lpc" type="checkbox" checked>疊上 LPC 原圖</label>
+        </div>
+        <div class="bar" id="lpc-frames" aria-label="選擇 LPC 走路影格"></div>
+        <div class="bar">
+          <button class="primary" id="lpc-solve">反推這一格</button>
+          <button class="chip" id="lpc-cycle">反推整個走路循環</button>
+          <button class="chip" id="lpc-play" disabled>▶ 播放反推結果</button>
+        </div>
+        <div class="stat" id="lpcstat">點一格影格，正面（朝下走）與側面（朝右走）的輪廓會成為反推目標。</div>
+        <div class="tbl" id="lpctbl"></div>
+        <p class="note">LPC 只有輪廓，沒有「哪個像素屬於哪根骨頭」，所以這裡改用輪廓損失（前景 / 背景），再加上自然姿勢先驗（反推整個循環時，還會要求和上一格的姿勢相近）：只看輪廓時，把腿折到身體後面也可能對得上，所以偏離自然範圍越多的角度，代價越高。正面與側面取同一格編號，假設是走路循環的同一個時刻。</p>
+        <p class="note">素材：LPC 男性基本角色（身體：bluecarrot16、BenCreating、Evert、ElizaWy、TheraHedwig、MuffinElZangano、Durrani、wulax、Redshrike；頭：bluecarrot16、BenCreating、Redshrike），授權 CC-BY-SA 3.0／GPL 3.0（頭另有 OGA-BY 3.0）。原始發布於 <a href="https://opengameart.org/content/liberated-pixel-cup-lpc-base-assets-sprites-map-tiles" target="_blank" rel="noopener">OpenGameArt</a>，本頁取自 <a href="https://github.com/sanderfrenken/Universal-LPC-Spritesheet-Character-Generator" target="_blank" rel="noopener">Universal LPC Spritesheet Character Generator</a>。</p>
+      </div>
 
       <div class="fit">
         <h2>反推姿勢 <span>給目標畫面，找回 22 個關節角度</span></h2>
@@ -214,29 +239,67 @@ function fk(pose, ground) {
 const toWorld = (T, b, X) => add(T.P[b], mv(T.R[b], sub(X, JOINTS[b].P)));
 const REST = {R: JOINTS.map(() => I3), P: JOINTS.map(j => j.P)};
 
-// ---------- 3D 形狀（靜止姿勢、世界座標） ----------
+// ---------- 3D 形狀（靜止姿勢、世界座標）；兩種體型：寫實（Winter 比例）與 LPC（Q 版） ----------
 const SHAPES = [];
 const cap = (k, A, B, ra, rb, mat, extra = {}) => SHAPES.push({kind: 'cap', bone: IDX[k], A, B, ra, rb, mat, ...extra});
 const ell = (k, C, r, mat, extra = {}) => SHAPES.push({kind: 'ell', bone: IDX[k], C, r, mat, ...extra});
 const J = k => JOINTS[IDX[k]].P;
-for (const sd of ['r', 'l']) {
-  cap(sd + 'Hip', J(sd + 'Hip'), J(sd + 'Kn'), 6.4, 5, 'pants');
-  cap(sd + 'Kn', J(sd + 'Kn'), J(sd + 'An'), 4.8, 3.4, 'pants');
-  const [ax] = J(sd + 'An');
-  cap(sd + 'An', [ax, yAn + 1.6, -3.5], [ax, yAn + 2.4, 8.5], 3.1, 2.4, 'shoe', {foot: true});
-  cap(sd + 'Sh', J(sd + 'Sh'), J(sd + 'El'), 4.6, 3.7, 'shirt');
-  cap(sd + 'El', J(sd + 'El'), J(sd + 'Wr'), 3.4, 2.6, 'skin');
-  const w = J(sd + 'Wr');
-  cap(sd + 'Wr', [w[0], w[1] + 1, w[2]], [w[0] + (sd === 'r' ? -0.5 : 0.5), w[1] + 9, w[2] + 1], 3, 2.4, 'skin');
+function setJoints(P) { JOINTS.forEach(j => j.P = P[j.k]); REST.P = JOINTS.map(j => j.P); }
+function buildReal() {
+  setJoints({pelvis: [40.5, yHp, 0], chest: [40.5, yHp - 2, 0], head: [40.5, yNeck + 2, 0.5], rSh: [24, ySh, 0], rEl: [21.5, yEl, 0], rWr: [19.5, yWr, 0.5], lSh: [57, ySh, 0], lEl: [59.5, yEl, 0], lWr: [61.5, yWr, 0.5], rHip: [34, yHp + 2, 0], rKn: [33.5, yKn, 1], rAn: [33.5, yAn, -1], lHip: [47, yHp + 2, 0], lKn: [47.5, yKn, 1], lAn: [47.5, yAn, -1]});
+  for (const sd of ['r', 'l']) {
+    cap(sd + 'Hip', J(sd + 'Hip'), J(sd + 'Kn'), 6.4, 5, 'pants');
+    cap(sd + 'Kn', J(sd + 'Kn'), J(sd + 'An'), 4.8, 3.4, 'pants');
+    const [ax] = J(sd + 'An');
+    cap(sd + 'An', [ax, yAn + 1.6, -3.5], [ax, yAn + 2.4, 8.5], 3.1, 2.4, 'shoe', {foot: true});
+    cap(sd + 'Sh', J(sd + 'Sh'), J(sd + 'El'), 4.6, 3.7, 'shirt');
+    cap(sd + 'El', J(sd + 'El'), J(sd + 'Wr'), 3.4, 2.6, 'skin');
+    const w = J(sd + 'Wr');
+    cap(sd + 'Wr', [w[0], w[1] + 1, w[2]], [w[0] + (sd === 'r' ? -0.5 : 0.5), w[1] + 9, w[2] + 1], 3, 2.4, 'skin');
+  }
+  ell('pelvis', [40.5, yHp + 1, 0], [11.5, 7.5, 7.8], 'pants');
+  ell('pelvis', [40.5, yHp - 3.5, 0], [12.2, 1.9, 8.6], 'belt');
+  ell('chest', [40.5, (ySh + yHp) / 2 - 2, 0.5], [13.6, 19, 9], 'shirt');
+  ell('chest', [40.5, ySh + 1.5, 0], [17.5, 4.6, 5.8], 'shirt');
+  cap('head', [40.5, yNeck - 1, 0.5], [40.5, yNeck + 5, 0], 3.6, 3.8, 'skin');
+  ell('head', [40.5, yNeck - 9, 1], [8.6, 10, 9], 'head', {face: true});
+  ell('head', [40.5, yNeck - 8, 9.6], [1.4, 1.7, 1.6], 'skin');
 }
-ell('pelvis', [40.5, yHp + 1, 0], [11.5, 7.5, 7.8], 'pants');
-ell('pelvis', [40.5, yHp - 3.5, 0], [12.2, 1.9, 8.6], 'belt');
-ell('chest', [40.5, (ySh + yHp) / 2 - 2, 0.5], [13.6, 19, 9], 'shirt');
-ell('chest', [40.5, ySh + 1.5, 0], [17.5, 4.6, 5.8], 'shirt');
-cap('head', [40.5, yNeck - 1, 0.5], [40.5, yNeck + 5, 0], 3.6, 3.8, 'skin');
-ell('head', [40.5, yNeck - 9, 1], [8.6, 10, 9], 'head', {face: true});
-ell('head', [40.5, yNeck - 8, 9.6], [1.4, 1.7, 1.6], 'skin');
-SHAPES.forEach((s, i) => s.id = i);
+// LPC 體型：依 LPC 男性基本角色（64×64 格、身高約 47 px、頭約佔 1/3）量出的比例，放大 2 倍、腳底對齊地面
+const LP = (x, y, z = 0) => [2 * x - 22.5, 2 * y + 14.5, 2 * z];
+function buildLPC() {
+  setJoints({pelvis: LP(31.5, 47.5), chest: LP(31.5, 46.5), head: LP(31.5, 32.5, 0.2),
+    rSh: LP(20.5, 35.5), rEl: LP(19.5, 41), rWr: LP(19.5, 45.5), lSh: LP(42.5, 35.5), lEl: LP(43.5, 41), lWr: LP(43.5, 45.5),
+    rHip: LP(25, 49), rKn: LP(25, 55), rAn: LP(25, 59.5), lHip: LP(38, 49), lKn: LP(38, 55), lAn: LP(38, 59.5)});
+  for (const sd of ['r', 'l']) {
+    // LPC 的腿正面窄、側面厚：每段用前後兩顆膠囊，做出橢圓截面
+    for (const dz of [-6, 6]) {
+      const o = ([x, y, z]) => [x, y, z + dz];
+      cap(sd + 'Hip', o(J(sd + 'Hip')), o(J(sd + 'Kn')), 7, 6.6, 'skin');
+      cap(sd + 'Kn', o(J(sd + 'Kn')), o(J(sd + 'An')), 6.6, 5.8, 'skin');
+    }
+    const [ax] = J(sd + 'An');
+    const fo = sd === 'r' ? -1.5 : 1.5;   // 腳掌正面較寬、略朝外
+    for (const dx of [-2.5, 2.5]) cap(sd + 'An', [ax + fo + dx, LP(0, 59.6)[1], -6], [ax + fo + dx, LP(0, 59.8)[1], 12], 4.4, 4.2, 'skin', {foot: true});
+    cap(sd + 'Sh', J(sd + 'Sh'), J(sd + 'El'), 5.6, 5, 'skin');
+    cap(sd + 'El', J(sd + 'El'), J(sd + 'Wr'), 5, 4.6, 'skin');
+    const w = J(sd + 'Wr');
+    cap(sd + 'Wr', w, [w[0], w[1] + 7, w[2] + 0.6], 4.8, 4.4, 'skin');
+  }
+  ell('pelvis', LP(31.5, 48.5), [16, 6, 16], 'skin');
+  ell('chest', LP(31.5, 41.5, 0), [19, 16, 19], 'skin');
+  ell('chest', LP(31.5, 34.4), [20.5, 5.5, 15], 'skin');
+  cap('head', LP(31.5, 30.5), LP(31.5, 33.5), 6, 6, 'skin');
+  ell('head', LP(31.5, 23.4, 1.2), [22, 17.5, 20], 'head', {face: true, bald: true});
+  ell('head', LP(31.5, 28.6, 1.2), [20, 9, 17], 'skin');   // 下巴：LPC 的頭偏方
+}
+let BODY = 'real';
+function buildBody(kind) {
+  BODY = kind; SHAPES.length = 0;
+  (kind === 'lpc' ? buildLPC : buildReal)();
+  SHAPES.forEach((s, i) => s.id = i);
+}
+buildBody('real');
 
 // ---------- 投影 ----------
 const VIEW = {
@@ -312,12 +375,12 @@ const MAT = Object.fromEntries(Object.entries({
 const OUTLINE = [26, 22, 34], MOUTH = hex('#b4594a');
 function color(s, t, u) {
   let m = s.mat, tone = t < -0.4 ? 0 : t > 0.45 ? 2 : 1;
-  if (s.face && u) {
-    const [dx, dy, dz] = u;
-    if (dy < -4.2 || dz < -3 || (Math.abs(dx) > 6.4 && dy < 1.5 && dz < 4)) m = 'hair';
-    else if (dz > 5.5 && Math.abs(Math.abs(dx) - 3.6) < 0.9 && dy > -1 && dy < 1.6) return OUTLINE;   // 眼睛
-    else if (dz > 6 && Math.abs(dx) < 1.7 && dy > 5 && dy < 6.2) return MOUTH;                       // 嘴
-    else if (Math.abs(dx) > 7.4 && Math.abs(dy - 0.8) < 2.2 && Math.abs(dz) < 2.2) { m = 'skin'; tone = 2; }   // 耳朵
+  if (s.face && u) {   // 臉部特徵以頭部半徑正規化，兩種體型共用
+    const dx = u[0] / s.r[0], dy = u[1] / s.r[1], dz = u[2] / s.r[2];
+    if (!s.bald && (dy < -0.42 || dz < -0.33 || (Math.abs(dx) > 0.74 && dy < 0.15 && dz < 0.44))) m = 'hair';
+    else if (dz > 0.6 && Math.abs(Math.abs(dx) - 0.42) < 0.1 && dy > -0.1 && dy < 0.16) return OUTLINE;   // 眼睛
+    else if (dz > 0.66 && Math.abs(dx) < 0.2 && dy > 0.5 && dy < 0.62) return MOUTH;                      // 嘴
+    else if (Math.abs(dx) > 0.86 && Math.abs(dy - 0.08) < 0.22 && Math.abs(dz) < 0.24) { m = 'skin'; tone = 2; }   // 耳朵
     else m = 'skin';
   }
   return MAT[m][tone];
@@ -480,17 +543,32 @@ function stats(bl) {
   return [...c].map((m, b) => m ? [sx[b] / m, sy[b] / m] : null);
 }
 const views = src => src === 'both' ? ['front', 'side'] : [src];
+// 自然姿勢先驗：只有輪廓時，很多不自然的姿勢也能對上輪廓（例如把腿折到身體後面藏起來），
+// 所以對偏離自然範圍的角度加上代價 Σ((θ − μ)/σ)²
+const PRIOR = Object.fromEntries(DOFS.map(d => [d.id, {mu: /El|Kn/.test(d.k) ? 10 : 0,
+  sig: d.k === 'head' ? 12 : d.k === 'pelvis' ? 8 : d.k === 'chest' ? 15 : /El|Kn/.test(d.k) ? 30 : /Sh/.test(d.k) && d.ax === 'f' ? 35 : 25}]));
+// 走路循環時再加「與上一格相近」的平滑項（σ = 20°）
+const SMOOTH_SIG = 20;
+const priorCost = pose => DOFS.reduce((a, d) => a + (((pose[d.id] ?? 0) - PRIOR[d.id].mu) / PRIOR[d.id].sig) ** 2
+  + (state.prevPose ? (((pose[d.id] ?? 0) - (state.prevPose[d.id] ?? 0)) / SMOOTH_SIG) ** 2 : 0), 0);
+const PRIOR_K = 160;   // 1 個標準差 ≈ 8 個不吻合像素
 function lossOf(pose, src) {
   const T = fk(pose, $('t-ground').checked); let L = 0, mis = 0;
   for (const v of views(src)) {
-    const bl = boneLab(v, T), st = stats(bl), tg = state.target.lab[v], ts = state.target.stats[v];
+    const bl = boneLab(v, T), tg = state.target.lab[v];
+    if (state.target.sil) {   // 只有輪廓（LPC 影格）：前景 / 背景不符的像素數
+      for (let i = 0; i < bl.length; i++) if ((bl[i] >= 0) !== (tg[i] >= 0)) mis++;
+      L += 20 * mis; continue;
+    }
+    const st = stats(bl), ts = state.target.stats[v];
     for (let b = 0; b < JOINTS.length; b++) { const p = st[b], q = ts[b]; L += p && q ? (p[0]-q[0])**2 + (p[1]-q[1])**2 : (p || q ? 400 : 0); }
     for (let i = 0; i < bl.length; i++) if (bl[i] !== tg[i]) mis++;
   }
-  return {L: L + 0.05 * mis, mis};
+  return {L: state.target.sil ? L + PRIOR_K * priorCost(pose) : L + 0.05 * mis, mis};
 }
 // 角度誤差會受「不同角度、同一姿勢」影響（例如前舉 180° 與外展 180° 都是手舉高），所以另外算 3D 關節位置誤差
 const errStats = pose => {
+  if (!state.target.truth) return silStats(pose);
   const e = DOFS.map(d => Math.abs((state.target.truth[d.id] ?? 0) - Math.round(pose[d.id] ?? 0)));
   const A = fk(pose, false).P, B = fk(state.target.truth, false).P;
   const pe = A.map((p, i) => Math.hypot(...sub(p, B[i])));
@@ -636,12 +714,23 @@ function softView(view, T, tg, tau, grad) {
   for (let i = 0; i < N; i++) {
     const t = tg[i];
     if (head[i] < 0) { if (t >= 0) L += 2; continue; }
+    const SIL = state.target.sil;
     let A = 1, S = 0; touched.length = 0;
     for (let k = head[i]; k >= 0; k = nxt[k]) {
       const [, b, o, e] = E[k]; A *= 1 - Math.min(o, 0.999); S += o * e;
       if (!Wb[b]) touched.push(b); Wb[b] += o * e;
     }
     const tbg = t < 0 ? 1 : 0, rA = 2 * (A - tbg);
+    if (SIL) {   // 只比輪廓：L = 2(A − t_bg)²，只有背景機率 A 有梯度
+      L += 2 * (A - tbg) ** 2;
+      for (let k = head[i]; k >= 0; k = nxt[k]) {
+        const en = E[k], o = en[2], gg = geo[en[4]], g = 2 * rA * (-A / (1 - Math.min(o, 0.999))) * o * (1 - o) / tau;
+        if (gg.cap) { gg.ga[0] += g * en[5]; gg.ga[1] += g * en[6]; gg.gb[0] += g * en[7]; gg.gb[1] += g * en[8]; }
+        else { gg.gc[0] += g * en[5]; gg.gc[1] += g * en[6]; }
+      }
+      for (const b of touched) Wb[b] = 0;
+      continue;
+    }
     L += (A - tbg) ** 2;
     let sumRP = 0;   // Σ_b 2(P_b − t_b)·W_b
     const R = {};
@@ -670,6 +759,11 @@ function softView(view, T, tg, tau, grad) {
 function softLoss(pose, src, tau, grad) {
   const T = fkGrad(pose, $('t-ground').checked); let L = 0;
   for (const v of views(src)) L += softView(v, T, state.target.lab[v], tau, grad);
+  if (state.target.sil) {   // 軟損失每像素約 2，先驗權重同比例縮小
+    const K = PRIOR_K / 10; L += K * priorCost(pose);
+    DOFS.forEach((d, i) => grad[i] += 2 * K * (((pose[d.id] ?? 0) - PRIOR[d.id].mu) / PRIOR[d.id].sig ** 2
+      + (state.prevPose ? ((pose[d.id] ?? 0) - (state.prevPose[d.id] ?? 0)) / SMOOTH_SIG ** 2 : 0)));
+  }
   return L;
 }
 function drawCurve(hist) {
@@ -725,7 +819,7 @@ async function polish(pose, src, steps, label) {
 }
 async function solveGD(src, label, iters = 150, nStarts = 3) {
   // 起點：損失最低的幾個預設姿勢各跑一次，留下較好的
-  const starts = Object.values(PRESETS).map(P => ({P, L: lossOf(P, src).L})).sort((a, b) => a.L - b.L).slice(0, nStarts);
+  const starts = Object.values({...PRESETS, ...(state.extraStarts ?? {})}).map(P => ({P, L: lossOf(P, src).L})).sort((a, b) => a.L - b.L).slice(0, nStarts);
   let bestPose = null, bestL = Infinity, it = 0;
   for (const [si, st] of starts.entries()) {
     const pose = {...st.P}; DOFS.forEach(d => pose[d.id] = clampR(pose[d.id] ?? 0, ...d.lim));
@@ -744,6 +838,7 @@ function groupMismatch(pose, src) {
   for (const v of views(src)) {
     const bl = boneLab(v, T), tg = state.target.lab[v];
     for (let i = 0; i < bl.length; i++) if (bl[i] !== tg[i]) {   // 不吻合的像素，同時算給「畫出來的部位」和「目標的部位」
+      if (state.target.sil) { if ((bl[i] >= 0) === (tg[i] >= 0)) continue; if (bl[i] >= 0) cnt[JOINTS[bl[i]].g]++; continue; }
       if (bl[i] >= 0) cnt[JOINTS[bl[i]].g]++;
       if (tg[i] >= 0) cnt[JOINTS[tg[i]].g]++;
     }
@@ -823,6 +918,121 @@ $('compare').onclick = async () => {
     Object.entries(res).map(([k, r]) => `<tr><td>${SRCNAME[k]}</td><td class="${cls(r, 'pmean')}">${r.pmean.toFixed(1)} px</td><td class="${cls(r, 'pmax')}">${r.pmax.toFixed(1)} px</td><td class="${cls(r, 'mean')}">${r.mean.toFixed(1)}°</td><td>${r.it}</td></tr>`).join('') + '</tbody></table>';
   state.pose = {...res.both.pose}; syncSliders(); drawAll(); errTable(res.both.pose);
   updateFitUI('比較完成；畫面與下表顯示雙視角的反推結果');
+};
+
+
+// ---------- 第 3 項：LPC 影格 → 輪廓目標 → 反推 ----------
+const LPC_SRC = 'data:image/png;base64,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';
+const lpcImg = new Image(); let lpcData = null;
+lpcImg.onload = () => {
+  const c = document.createElement('canvas'); c.width = lpcImg.width; c.height = lpcImg.height;
+  const x = c.getContext('2d'); x.drawImage(lpcImg, 0, 0); lpcData = x.getImageData(0, 0, c.width, c.height);
+  $('lpc-frames').innerHTML = Array.from({length: 9}, (_, f) =>
+    `<button class="thumb" data-frame="${f}" aria-pressed="false" aria-label="第 ${f + 1} 格"><canvas width="64" height="64"></canvas><span>${f + 1}</span></button>`).join('');
+  $('lpc-frames').querySelectorAll('.thumb').forEach(b => {
+    const f = +b.dataset.frame, cx = b.querySelector('canvas').getContext('2d');
+    cx.imageSmoothingEnabled = false; cx.drawImage(lpcImg, f * 64 + 8, 64, 48, 64, 8, 0, 48, 64);
+    b.onclick = () => { stopAnim(); stopPlay(); loadLPC(f); };
+  });
+};
+lpcImg.src = LPC_SRC;
+const lpcRow = view => view === 'front' ? 0 : 1;   // 上排朝下走＝正面；下排朝右走＝側面
+function loadLPC(f) {
+  if (BODY !== 'lpc') setBody('lpc');
+  const lab = {};
+  for (const v of ['front', 'side']) {
+    const L = new Int8Array(W * H).fill(-1), oy = lpcRow(v) * 64;
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {   // 我們的像素 → LPC 像素（放大 2 倍的反向）
+      const lx = Math.floor((x + 0.5 + 22.5) / 2), ly = Math.floor((y + 0.5 - 14.5) / 2);
+      if (lx < 0 || ly < 0 || lx >= 64 || ly >= 64) continue;
+      if (lpcData.data[((oy + ly) * lpcData.width + f * 64 + lx) * 4 + 3] > 0) L[y * W + x] = 0;
+    }
+    lab[v] = L;
+  }
+  state.target = {sil: true, lab, frame: f};
+  document.querySelectorAll('.thumb').forEach(b => b.setAttribute('aria-pressed', +b.dataset.frame === f));
+  $('errtbl').innerHTML = ''; $('cmptbl').innerHTML = '';
+  const st = silStats(state.pose);
+  $('lpcstat').innerHTML = `第 ${f + 1} 格已設為目標・目前輪廓重疊率（IoU）正面 <b>${(st.iouF * 100).toFixed(0)}%</b>、側面 <b>${(st.iouS * 100).toFixed(0)}%</b>`;
+  updateFitUI(''); drawAll();
+}
+function silStats(pose) {
+  const T = fk(pose, $('t-ground').checked), out = {};
+  for (const v of ['front', 'side']) {
+    const bl = boneLab(v, T), tg = state.target.lab[v]; let I = 0, U = 0;
+    for (let i = 0; i < bl.length; i++) { const a = bl[i] >= 0, b = tg[i] >= 0; if (a && b) I++; if (a || b) U++; }
+    out[v] = I / (U || 1);
+  }
+  return {iouF: out.front, iouS: out.side, mean: 0, max: 0, pmean: 0, pmax: 0, e: DOFS.map(() => 0)};
+}
+function setBody(kind) {
+  buildBody(kind);
+  document.querySelectorAll('[data-body]').forEach(x => x.setAttribute('aria-pressed', x.dataset.body === kind));
+  state.target = null; state.pose = {...PRESETS['立正']}; syncSliders(); updateFitUI('尚未設定目標');
+  $('errtbl').innerHTML = ''; $('cmptbl').innerHTML = '';
+  document.querySelectorAll('.thumb').forEach(b => b.setAttribute('aria-pressed', 'false'));
+  drawAll();
+}
+document.querySelectorAll('[data-body]').forEach(b => b.addEventListener('click', () => { stopAnim(); stopPlay(); setBody(b.dataset.body); }));
+$('t-lpc').addEventListener('change', drawAll);
+// 疊上 LPC 原圖：在 draw() 之後補畫
+const drawBase = draw;
+draw = function (view, T) {
+  drawBase(view, T);
+  if (!state.target?.sil || !$('t-lpc').checked || !lpcImg.complete) return;
+  const cv = cvs[view], ctx = cv.getContext('2d'), k = cv.width / W;
+  ctx.save(); ctx.globalAlpha = 0.4; ctx.imageSmoothingEnabled = false;
+  ctx.drawImage(lpcImg, state.target.frame * 64, lpcRow(view) * 64, 64, 64, -22.5 * k, 14.5 * k, 128 * k, 128 * k);
+  ctx.restore();
+};
+const lpcRes = [];
+async function solveLPC(f, warm) {
+  loadLPC(f);
+  state.extraStarts = warm ? {prev: warm} : null; state.prevPose = warm;
+  const t0 = performance.now(), r = await METHODS[state.method][1]('both', `第 ${f + 1} 格`);
+  state.extraStarts = null; state.prevPose = null;
+  const st = silStats(r.pose);
+  lpcRes[f] = {pose: {...r.pose}, ...st, ms: performance.now() - t0, it: r.it};
+  return lpcRes[f];
+}
+function lpcTable() {
+  const rows = lpcRes.map((r, f) => r ? `<tr><td>${f + 1}</td><td>${(r.iouF * 100).toFixed(1)}%</td><td>${(r.iouS * 100).toFixed(1)}%</td><td>${(r.ms / 1000).toFixed(1)} s</td></tr>` : '').join('');
+  $('lpctbl').innerHTML = `<table><thead><tr><th>格</th><th>正面 IoU</th><th>側面 IoU</th><th>時間</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+$('lpc-solve').onclick = async () => {
+  if (!lpcData) return;
+  const f = state.target?.sil ? state.target.frame : 0;
+  stopAnim(); stopPlay(); state.solving = true; lpcBusy(true);
+  const r = await solveLPC(f, null);
+  state.solving = false; lpcBusy(false); lpcTable();
+  $('lpcstat').innerHTML = `第 ${f + 1} 格完成（${METHODS[state.method][0]}・${(r.ms / 1000).toFixed(1)} s）：輪廓重疊率 正面 <b>${(r.iouF * 100).toFixed(1)}%</b>、側面 <b>${(r.iouS * 100).toFixed(1)}%</b>`;
+  updateFitUI('');
+};
+$('lpc-cycle').onclick = async () => {
+  if (!lpcData) return;
+  stopAnim(); stopPlay(); state.solving = true; lpcBusy(true);
+  let warm = null;
+  for (let f = 0; f < 9; f++) {   // 每一格以上一格的結果當作額外起點
+    $('lpcstat').innerHTML = `反推整個走路循環：第 ${f + 1}／9 格…`;
+    const r = await solveLPC(f, warm); warm = r.pose; lpcTable();
+  }
+  state.solving = false; lpcBusy(false);
+  const m = k => lpcRes.reduce((a, r) => a + r[k], 0) / lpcRes.length;
+  $('lpcstat').innerHTML = `走路循環完成：平均輪廓重疊率 正面 <b>${(m('iouF') * 100).toFixed(1)}%</b>、側面 <b>${(m('iouS') * 100).toFixed(1)}%</b>，共 ${(m('ms') * 9 / 1000).toFixed(0)} s。按「播放反推結果」看骨架照著 LPC 走。`;
+  updateFitUI('');
+};
+function lpcBusy(b) { ['lpc-solve', 'lpc-cycle'].forEach(id => $(id).disabled = b); $('lpc-play').disabled = b || lpcRes.filter(Boolean).length < 2; }
+let playTimer = 0;
+function stopPlay() { if (!playTimer) return; clearInterval(playTimer); playTimer = 0; $('lpc-play').textContent = '▶ 播放反推結果'; }
+$('lpc-play').onclick = () => {
+  if (playTimer) return stopPlay();
+  const frames = lpcRes.map((r, f) => r ? f : -1).filter(f => f >= 1);   // 第 1 格是站姿，循環從第 2 格開始
+  let i = 0; $('lpc-play').textContent = '■ 停止播放';
+  playTimer = setInterval(() => {
+    const f = frames[i++ % frames.length]; state.target.frame = f;
+    state.target.lab = state.target.lab; state.pose = {...lpcRes[f].pose}; syncSliders(); drawAll();
+    document.querySelectorAll('.thumb').forEach(b => b.setAttribute('aria-pressed', +b.dataset.frame === f));
+  }, 110);
 };
 
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawAll);
