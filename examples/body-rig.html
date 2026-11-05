@@ -97,6 +97,12 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
       <label><input id="t-ground" type="checkbox" checked>地面約束</label>
       <label><input id="t-grid" type="checkbox">像素格線</label>
     </div>
+    <div class="toggles" id="phys-bar" hidden>
+      <label><input id="t-phys" type="checkbox" checked>衣物物理</label>
+      <label>重力 <input id="p-g" type="range" min="0" max="1200" value="600" style="width:80px"></label>
+      <label>阻尼 <input id="p-d" type="range" min="0" max="30" value="6" style="width:80px"></label>
+      <label>硬度 <input id="p-k" type="range" min="1" max="8" value="4" style="width:80px"></label>
+    </div>
     <div class="legend" id="legend" hidden><span>0</span><i></i><span>40 px</span></div>
   </div>
 
@@ -127,6 +133,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
           <div class="seg" role="group" aria-label="體型">
             <button aria-pressed="true" data-body="real">寫實</button>
             <button aria-pressed="false" data-body="lpc">LPC</button>
+            <button aria-pressed="false" data-body="anime">動漫</button>
           </div>
           <label class="toggles"><input id="t-lpc" type="checkbox" checked>疊上 LPC 原圖</label>
         </div>
@@ -138,6 +145,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
           <button class="chip" id="lpc-cycle">反推整個動作</button>
           <button class="chip" id="lpc-play" disabled>▶ 播放反推結果</button>
           <button class="chip" id="lpc-real" disabled>套用到寫實體型</button>
+          <button class="chip" id="lpc-anime" disabled>套用到動漫體型</button>
         </div>
         <div class="stat" id="lpcstat">點一格影格，正面（朝下走）與側面（朝右走）的輪廓會成為反推目標。</div>
         <div class="tbl" id="lpctbl"></div>
@@ -247,6 +255,7 @@ function fk(pose, ground) {
   return T;
 }
 const toWorld = (T, b, X) => add(T.P[b], mv(T.R[b], sub(X, JOINTS[b].P)));
+const shapeW = (T, s, X) => s.world ? X : toWorld(T, s.bone, X);   // 物理形狀（頭髮、裙子）直接存世界座標
 const REST = {R: JOINTS.map(() => I3), P: JOINTS.map(j => j.P)};
 
 // ---------- 3D 形狀（靜止姿勢、世界座標）；兩種體型：寫實（Winter 比例）與 LPC（Q 版） ----------
@@ -319,10 +328,123 @@ function buildLPC() {
   ell('head', LP(31.5, P.hy, P.hz), P.hr, 'head', {face: true, bald: true});
   ell('head', LP(31.5, P.cy, P.cz), P.cr, 'skin');   // 下巴：LPC 的頭偏方
 }
+// 動漫體型：6 頭身（頭高 ≈ 身高 / 6），腿長 ≈ 身高 / 2，四肢單一膠囊、細腰窄肩
+function buildAnime() {
+  const m = x => 81 - x;   // 左右鏡像
+  setJoints({pelvis: [40.5, 70, 0], chest: [40.5, 68, 0], head: [40.5, 33, 0], rSh: [31.5, 38, 0], rEl: [30, 56, 0], rWr: [29, 72, 0.5],
+    lSh: [m(31.5), 38, 0], lEl: [m(30), 56, 0], lWr: [m(29), 72, 0.5], rHip: [36.5, 73, 0], rKn: [36, 104, 1], rAn: [36, 132, -0.5],
+    lHip: [m(36.5), 73, 0], lKn: [m(36), 104, 1], lAn: [m(36), 132, -0.5]});
+  for (const sd of ['r', 'l']) {
+    cap(sd + 'Hip', J(sd + 'Hip'), J(sd + 'Kn'), 4.4, 3.5, 'skin');
+    cap(sd + 'Kn', J(sd + 'Kn'), J(sd + 'An'), 3.4, 2.5, 'sock');
+    const [ax] = J(sd + 'An');
+    cap(sd + 'An', [ax, 134, -2.5], [ax, 134.6, 6], 2.6, 2.2, 'shoe', {foot: true});
+    cap(sd + 'Sh', J(sd + 'Sh'), J(sd + 'El'), 2.8, 2.4, 'top');
+    cap(sd + 'El', J(sd + 'El'), J(sd + 'Wr'), 2.3, 1.9, 'skin');
+    const w = J(sd + 'Wr');
+    cap(sd + 'Wr', [w[0], w[1] + 0.5, w[2]], [w[0], w[1] + 6, w[2] + 0.8], 2.1, 1.8, 'skin');
+  }
+  ell('pelvis', [40.5, 72, 0], [8, 5, 5.8], 'skirt');
+  ell('chest', [40.5, 63, 0], [6.6, 5, 5], 'top');          // 細腰
+  ell('chest', [40.5, 49, 0.3], [9.2, 11.2, 5.6], 'top');   // 胸廓（比例中性）
+  ell('chest', [40.5, 40.5, 0], [10.4, 4.4, 4.8], 'top');     // 肩線
+  cap('head', [40.5, 30.5, 0], [40.5, 36, 0], 2.3, 2.5, 'skin');
+  ell('head', [40.5, 21, -2.6], [9.6, 10.4, 7.6], 'ahair');   // 後腦的頭髮
+  ell('head', [40.5, 20, 0.6], [9.2, 10.6, 9.2], 'head', {face: true, anime: true});
+  for (const x of [31.3, 49.7]) ell('head', [x, 13.5, -1.2], [2.2, 2.2, 2.2], 'ahair');   // 綁髮處
+  physInit();
+}
+// ---------- L6：衣物物理（Verlet 質點＋距離約束＋ReLU 碰撞） ----------
+// 每個質點：x ← x + (x − x_prev)(1 − 阻尼) + g·dt²；約束與碰撞都是「乘、加、ReLU」：
+//   距離約束 p += k·(d − L)/d·(q − p)/2；碰撞 p += n·ReLU(r − |p − c|)
+const PHYS = {chains: [], links: [], parts: [], shapes: [], last: 0};
+function physInit() {
+  const P = PHYS; P.chains = []; P.links = []; P.parts = []; P.shapes = [];
+  const part = (x, pin) => { P.parts.push({x: [...x], o: [...x], pin}); return P.parts.length - 1; };
+  const link = (a, b) => P.links.push({a, b, L: Math.hypot(...sub(P.parts[a].x, P.parts[b].x))});
+  const wcap = (a, b, ra, rb, mat, bone) => { const s = {kind: 'cap', world: true, bone: IDX[bone], A: [0, 0, 0], B: [0, 0, 0], ra, rb, mat, pa: a, pb: b}; SHAPES.push(s); P.shapes.push(s); };
+  // 雙馬尾：每邊 1 個固定根部（跟著頭）＋ 5 節
+  for (const sd of [-1, 1]) {
+    const rootRest = [40.5 + sd * 9.8, 14, -1.4], ids = [part(rootRest, {bone: 'head', X: rootRest})];
+    for (let k = 1; k <= 5; k++) ids.push(part([rootRest[0] + sd * (1.2 + k * 0.6), rootRest[1] + k * 5.8, rootRest[2] - k * 0.6], null));
+    for (let k = 1; k < ids.length; k++) { link(ids[k - 1], ids[k]); wcap(ids[k - 1], ids[k], 3.4 - k * 0.35, 3.05 - k * 0.35, 'ahair', 'head'); }
+    P.chains.push({kind: 'hair', ids});
+  }
+  // 短裙：12 條從腰圍垂下的鏈，每條 3 節；同一層相鄰的鏈互相牽住，維持裙擺的圓周
+  const N = 12, rows = [];
+  for (let i = 0; i < N; i++) {
+    const t = i / N * 2 * Math.PI, c = Math.cos(t), sn = Math.sin(t);
+    const rootRest = [40.5 + 7.6 * c, 66, 5.6 * sn], ids = [part(rootRest, {bone: 'pelvis', X: rootRest})];
+    for (let k = 1; k <= 3; k++) ids.push(part([40.5 + (7.6 + k * 1.9) * c, 66 + k * 4.4, (5.6 + k * 1.9) * sn], null));
+    for (let k = 1; k < ids.length; k++) { link(ids[k - 1], ids[k]); wcap(ids[k - 1], ids[k], 2.3, 2.3, 'skirt', 'pelvis'); }
+    rows.push(ids);
+  }
+  for (let i = 0; i < N; i++) for (let k = 1; k <= 3; k++) { const a = rows[i][k], b = rows[(i + 1) % N][k]; link(a, b); wcap(a, b, 2.1, 2.1, 'skirt', 'pelvis'); }
+  P.chains.push({kind: 'skirt', rows});
+  P.fresh = true;
+}
+function physColliders(T) {   // 碰撞體（世界座標）：頭、胸、骨盆用球，大腿用膠囊
+  const w = (b, X) => toWorld(T, IDX[b], X);
+  return {
+    hair: [{c: w('head', [40.5, 20, 0.6]), r: 10.6}, {c: w('chest', [40.5, 47, 0]), r: 9.5}, {c: w('rSh', J('rSh')), r: 4}, {c: w('lSh', J('lSh')), r: 4}],
+    skirt: [{c: w('pelvis', [40.5, 71, 0]), r: 8.2}],
+    caps: ['rHip', 'lHip'].map(k => ({a: T.P[IDX[k]], b: T.P[IDX[k.replace('Hip', 'Kn')]], r: 6.4})),
+  };
+}
+function physStep(T, dt, opt) {
+  const P = PHYS, g = opt.g, damp = opt.damp, iters = opt.iters, col = physColliders(T);
+  for (const p of P.parts) {
+    if (p.pin) { p.o = p.x; p.x = toWorld(T, IDX[p.pin.bone], p.pin.X); continue; }
+    const v = sub(p.x, p.o); p.o = p.x;
+    p.x = [p.x[0] + v[0] * (1 - damp), p.x[1] + v[1] * (1 - damp) + g * dt * dt, p.x[2] + v[2] * (1 - damp)];
+  }
+  const hairSet = new Set(P.chains.filter(c => c.kind === 'hair').flatMap(c => c.ids));
+  for (let it = 0; it < iters; it++) {
+    for (const l of P.links) {
+      const A = P.parts[l.a], B = P.parts[l.b], d = sub(B.x, A.x), n = Math.hypot(...d) || 1e-6, e = (n - l.L) / n;
+      const wa = A.pin ? 0 : 1, wb = B.pin ? 0 : 1, ws = wa + wb; if (!ws) continue;
+      A.x = add(A.x, d.map(v => v * e * wa / ws)); B.x = sub(B.x, d.map(v => v * e * wb / ws));
+    }
+    P.parts.forEach((p, i) => {
+      if (p.pin) return;
+      const push = (c, r) => { const d = sub(p.x, c), n = Math.hypot(...d) || 1e-6, pen = relu(r - n); if (pen) p.x = add(p.x, d.map(v => v / n * pen)); };
+      if (hairSet.has(i)) col.hair.forEach(o => push(o.c, o.r + 1.5));
+      else {
+        col.skirt.forEach(o => push(o.c, o.r));
+        for (const cp of col.caps) {   // 最近點投影到大腿線段，再推出半徑之外
+          const ab = sub(cp.b, cp.a), h = Math.min(1, relu(sub(p.x, cp.a).reduce((s, v, k) => s + v * ab[k], 0) / ab.reduce((s, v) => s + v * v, 0)));
+          push(add(cp.a, ab.map(v => v * h)), cp.r);
+        }
+      }
+    });
+  }
+  for (const s of P.shapes) { s.A = P.parts[s.pa].x; s.B = P.parts[s.pb].x; }
+}
+const physOpt = () => ({g: +$('p-g').value, damp: +$('p-d').value / 100, iters: +$('p-k').value});
+function physPrep(T) {
+  // 物理關閉、剛建好或姿勢被滑桿／預設姿勢直接改掉時：用大阻尼多算幾步，直接停在靜止狀態
+  if (PHYS.fresh || !$('t-phys').checked) {
+    if (PHYS.fresh) {   // 剛建好：自由質點先跟著骨盆一起平移到目前位置，再開始收斂
+      const d0 = sub(T.P[IDX.pelvis], JOINTS[IDX.pelvis].P);
+      for (const p of PHYS.parts) if (!p.pin) { p.x = add(p.x, d0); p.o = p.x; }
+    }
+    for (let k = 0; k < 80; k++) physStep(T, 1 / 60, {...physOpt(), g: physOpt().g || 600, damp: 0.5});
+    PHYS.fresh = false;
+  }
+}
+function physLoop(ts) {
+  if (BODY === 'anime' && $('t-phys').checked) {
+    const dt = Math.min(1 / 30, (ts - (PHYS.last || ts)) / 1000 || 1 / 60);
+    const T = fk(state.pose, $('t-ground').checked);
+    physStep(T, dt / 2, physOpt()); physStep(T, dt / 2, physOpt());
+    draw('front', T); draw('side', T);
+  }
+  PHYS.last = ts; requestAnimationFrame(physLoop);
+}
 let BODY = 'real';
 function buildBody(kind) {
   BODY = kind; SHAPES.length = 0;
-  (kind === 'lpc' ? buildLPC : buildReal)();
+  ({lpc: buildLPC, anime: buildAnime, real: buildReal})[kind]();
   SHAPES.forEach((s, i) => s.id = i);
 }
 buildBody('real');
@@ -341,7 +463,7 @@ function render(view, T, full = true) {
   const rest = full ? [] : null;
   for (const s of SHAPES) {
     if (s.kind === 'cap') {
-      const Aw = toWorld(T, s.bone, s.A), Bw = toWorld(T, s.bone, s.B);
+      const Aw = shapeW(T, s, s.A), Bw = shapeW(T, s, s.B);
       const a = V.proj(Aw), b = V.proj(Bw), da = V.depth(Aw), db = V.depth(Bw), r = Math.max(s.ra, s.rb);
       const a0 = V.proj(s.A), b0 = V.proj(s.B);
       const bx = b[0] - a[0], by = b[1] - a[1], L2 = bx*bx + by*by, L = Math.sqrt(L2);
@@ -397,12 +519,21 @@ const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
 const MAT = Object.fromEntries(Object.entries({
   skin: ['#f6cfa8', '#f0b98c', '#cf9068'], shirt: ['#6b9ae6', '#4a7bd1', '#33589c'], pants: ['#4c5276', '#3a3f5c', '#272a40'],
   shoe: ['#8a5634', '#6b3f26', '#4a2a19'], belt: ['#3a3044', '#2a2230', '#1c1622'], hair: ['#6a4636', '#4a3026', '#2e1d17'],
+  ahair: ['#f29bc1', '#de78a8', '#b0548a'], top: ['#f6f3ee', '#ddd7cd', '#b0a99d'], skirt: ['#ec6b72', '#cf4c5a', '#9e3443'],
+  sock: ['#3c3f58', '#2c2e44', '#1d1f30'],
 }).map(([k, v]) => [k, v.map(hex)]));
 const OUTLINE = [26, 22, 34], MOUTH = hex('#b4594a');
 function color(s, t, u) {
   let m = s.mat, tone = t < -0.4 ? 0 : t > 0.45 ? 2 : 1;
   if (s.face && u) {   // 臉部特徵以頭部半徑正規化，兩種體型共用
     const dx = u[0] / s.r[0], dy = u[1] / s.r[1], dz = u[2] / s.r[2];
+    if (s.anime) {   // 動漫臉：瀏海較低、大眼睛（深色瞳孔＋高光）
+      const ex = Math.abs(Math.abs(dx) - 0.4);
+      if (dy < -0.3 || dz < -0.25 || (Math.abs(dx) > 0.8 && dy < 0.35 && dz < 0.1)) return MAT.ahair[tone];
+      if (dz > 0.45 && ex < 0.17 && dy > -0.22 && dy < 0.26) return ex < 0.06 && dy < -0.08 ? [255, 255, 255] : dy > 0.1 ? [86, 52, 92] : OUTLINE;
+      if (dz > 0.66 && Math.abs(dx) < 0.12 && dy > 0.52 && dy < 0.6) return MOUTH;
+      return MAT.skin[tone];
+    }
     if (!s.bald && (dy < -0.42 || dz < -0.33 || (Math.abs(dx) > 0.74 && dy < 0.15 && dz < 0.44))) m = 'hair';
     else if (dz > 0.6 && Math.abs(Math.abs(dx) - 0.42) < 0.1 && dy > -0.1 && dy < 0.16) return OUTLINE;   // 眼睛
     else if (dz > 0.66 && Math.abs(dx) < 0.2 && dy > 0.5 && dy < 0.62) return MOUTH;                      // 嘴
@@ -447,7 +578,8 @@ function draw(view, T) {
         const nx = x + dx, ny = y + dy;
         if (nx < 0 || ny < 0 || nx >= W || ny >= H) { edge = true; break; }
         const n = ny*W + nx, nid = r.sid[n];
-        if (nid < 0 || (r.z[n] < r.z[i] - 2.5 && JOINTS[SHAPES[nid].bone].g !== g)) { edge = true; break; }
+        const nb = SHAPES[nid]?.bone;   // 關節接縫（肢體接到它的父骨頭）不畫輪廓
+        if (nid < 0 || (r.z[n] < r.z[i] - 2.5 && JOINTS[nb].g !== g && JOINTS[s.bone].p !== JOINTS[nb].k && JOINTS[nb].p !== JOINTS[s.bone].k)) { edge = true; break; }
       }
       if (state.mode === 'heat') c = heat(Math.hypot(x + 0.5 - r.rx[i], y + 0.5 - r.ry[i]) / 40);
       else if (state.mode === 'bone') c = BONECOL[s.bone];
@@ -485,7 +617,7 @@ function draw(view, T) {
     JOINTS.forEach((j, i) => { const p = V.proj(T.P[i]); ctx.beginPath(); ctx.arc(p[0]*k, p[1]*k, 3.2, 0, 7); ctx.fill(); });
   }
 }
-const drawAll = () => { const T = fk(state.pose, $('t-ground').checked); draw('front', T); draw('side', T); };
+const drawAll = () => { const T = fk(state.pose, $('t-ground').checked); if (BODY === 'anime') physPrep(T); draw('front', T); draw('side', T); };
 
 // ---------- 控制台 ----------
 function buildPanel() {
@@ -698,7 +830,7 @@ function softView(view, T, tg, tau, grad) {
   for (const s of SHAPES) {
     const gi = geo.length;
     if (s.kind === 'cap') {
-      const Aw = toWorld(T, s.bone, s.A), Bw = toWorld(T, s.bone, s.B), a = V.proj(Aw), b = V.proj(Bw);
+      const Aw = shapeW(T, s, s.A), Bw = shapeW(T, s, s.B), a = V.proj(Aw), b = V.proj(Bw);
       const da = V.depth(Aw) - zoff, db = V.depth(Bw) - zoff, r = Math.max(s.ra, s.rb) + 4 * tau;
       const JA = jac3(T, s.bone, Aw), JB = jac3(T, s.bone, Bw);
       geo.push({cap: true, Ja: proj2(view, JA), Jb: proj2(view, JB), Jza: depthJ(view, JA), Jzb: depthJ(view, JB), ga: [0, 0], gb: [0, 0], gza: 0, gzb: 0});
@@ -1023,7 +1155,7 @@ function silStats(pose) {
   return {iouF: out.front, iouS: out.side, mean: 0, max: 0, pmean: 0, pmax: 0, e: DOFS.map(() => 0)};
 }
 function setBody(kind) {
-  buildBody(kind);
+  buildBody(kind); $('phys-bar').hidden = kind !== 'anime';
   document.querySelectorAll('[data-body]').forEach(x => x.setAttribute('aria-pressed', x.dataset.body === kind));
   state.target = null; state.pose = {...PRESETS['立正']}; syncSliders(); updateFitUI('尚未設定目標');
   $('errtbl').innerHTML = ''; $('cmptbl').innerHTML = '';
@@ -1081,7 +1213,7 @@ $('lpc-cycle').onclick = async () => {
   $('lpcstat').innerHTML = `${LPC_CHARS[lpcSel.c].n}・${lpcAct().n}完成：平均輪廓重疊率 正面 <b>${(m('iouF') * 100).toFixed(1)}%</b>、側面 <b>${(m('iouS') * 100).toFixed(1)}%</b>，共 ${(m('ms') * n / 1000).toFixed(0)} s。按「播放反推結果」看骨架照著 LPC 動。`;
   updateFitUI('');
 };
-function lpcBusy(b) { ['lpc-solve', 'lpc-cycle'].forEach(id => $(id).disabled = b); $('lpc-play').disabled = $('lpc-real').disabled = b || lpcRes.filter(Boolean).length < 2; }
+function lpcBusy(b) { ['lpc-solve', 'lpc-cycle'].forEach(id => $(id).disabled = b); $('lpc-play').disabled = $('lpc-real').disabled = $('lpc-anime').disabled = b || lpcRes.filter(Boolean).length < 2; }
 let playTimer = 0;
 function stopPlay() { if (!playTimer) return; clearInterval(playTimer); playTimer = 0; $('lpc-play').textContent = '▶ 播放反推結果'; }
 $('lpc-play').onclick = () => {
@@ -1101,6 +1233,11 @@ function startPlay() {
 
 // 步態移植：兩種體型共用同一組 22 個自由度，角度原封不動套到寫實骨架上播放。
 // LPC 是 Q 版（腿短、頭大），同樣的角度在寫實體型上步幅會比較大；這裡不做比例換算。
+$('lpc-anime').onclick = () => {
+  stopAnim(); stopPlay(); setBody('anime');
+  $('lpcstat').innerHTML = `動漫體型正照著 LPC 反推出的角度動（${lpcRes.filter(Boolean).length} 格，角度直接套用；雙馬尾與裙子由物理模擬帶動）。按「播放反推結果」切回 LPC 體型對照。`;
+  startPlay();
+};
 $('lpc-real').onclick = () => {
   stopAnim(); stopPlay(); setBody('real');
   $('lpcstat').innerHTML = `寫實體型正照著 LPC 反推出的角度動（${lpcRes.filter(Boolean).length} 格，角度直接套用、不做比例換算）。按「播放反推結果」切回 LPC 體型對照。`;
@@ -1108,5 +1245,7 @@ $('lpc-real').onclick = () => {
 };
 
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawAll);
-buildPanel(); drawAll();
+buildPanel(); drawAll(); requestAnimationFrame(physLoop);
+['p-g', 'p-d', 'p-k'].forEach(id => $(id).addEventListener('input', () => {}));
+$('t-phys').addEventListener('change', () => { PHYS.fresh = true; drawAll(); });
 </script>
