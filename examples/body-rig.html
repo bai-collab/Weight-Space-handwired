@@ -29,6 +29,13 @@ header p { margin: 4px 0 0; color: var(--muted); max-width: 72ch; }
 @media (max-width: 1000px) { .top { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .top .panel { grid-column: 1 / -1; } }
 @media (max-width: 520px) { .top { grid-template-columns: 1fr; } }
 .stage { background: var(--stage); border-radius: 6px; padding: 10px; display: grid; gap: 8px; }
+/* 捲動右側控制台時，左側兩張圖固定在畫面上；高度不超過視窗 */
+@media (min-width: 521px) {
+  .stage { position: sticky; top: calc(env(safe-area-inset-top, 0px) + 12px); }
+  .stage canvas { width: auto; max-height: calc(100vh - 80px); margin: 0 auto; }
+}
+/* 平板寬度時控制台排在圖的下方，圖就不固定，以免擋住控制台 */
+@media (max-width: 1000px) { .stage { position: static; } }
 .stage .cap { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; color: var(--stage-ink); font: 12px var(--f-mono); }
 .stage .cap b { font: 400 14px var(--f-display); color: #fff; }
 canvas { width: 100%; height: auto; aspect-ratio: 81 / 144; image-rendering: pixelated; display: block; max-width: 100%; }
@@ -162,7 +169,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
         <div class="stat" id="fitstat">尚未設定目標</div>
         <div class="tbl" id="cmptbl"></div>
         <div class="tbl" id="errtbl"></div>
-        <canvas id="curve" width="560" height="90" style="aspect-ratio:560/90;image-rendering:auto" aria-label="損失曲線"></canvas>
+        <canvas id="curve" hidden width="560" height="90" style="aspect-ratio:560/90;image-rendering:auto" aria-label="損失曲線"></canvas>
         <p class="note"><b>梯度下降</b>：把像素邊緣改成平滑的機率（邊緣寬度從 6 px 逐步收窄到 0.5 px），遮擋用依深度加權的軟混合。損失對 22 個角度的梯度用解析式算：像素 → 形狀邊界與深度 → 投影端點 → 運動鏈雅可比（旋轉軸 × 力臂），再用 Adam 更新 150 步（從 3 個起點各跑一次）；最後用小步長逐關節試探收尾。<b>混合式</b>：梯度下降之後，統計哪個部位（軀幹、四肢）不吻合的像素最多，只對那個部位試幾組候選角度（各預設姿勢、16 組隨機、與對側肢體互換），挑最好的兩組局部重跑梯度下降，變好才保留，最多 3 輪。</p>
         <p class="note">目標以橘色虛線輪廓疊在兩張圖上。損失＝各骨頭像素重心與目標的距離平方和，加上少量部位標籤不符的像素數；雙視角就是兩張圖的損失相加。搜尋從損失最低的預設姿勢出發，逐關節有限差分（步長 32° → 1°），再隨機擾動重來 5 輪，跳出局部最小值。評分以 3D 關節位置誤差為主，因為不同角度組合可能擺出同一個姿勢。</p>
       </div>
@@ -767,6 +774,7 @@ function softLoss(pose, src, tau, grad) {
   return L;
 }
 function drawCurve(hist) {
+  $('curve').hidden = false;
   const cv = $('curve'), ctx = cv.getContext('2d'), css = getComputedStyle(document.documentElement);
   ctx.clearRect(0, 0, cv.width, cv.height);
   if (hist.length < 2) return;
