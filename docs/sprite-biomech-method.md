@@ -1,0 +1,153 @@
+# handwired × Sprite：從神經訊號到像素的可微分動畫管線
+
+> 目標：把**神經傳導 → 肌肉 → 關節動力學 → 骨架運動學 → 蒙皮 → 像素化**整條鏈，全部寫成「乘、加、ReLU」的手寫網路。
+> 規則由公式直接決定，不需要訓練資料；但整條鏈可微分，所以之後可以拿現成的 sprite sheet 解凍部分權重來微調。
+
+> ⚠️ **查證狀態**：本文撰寫時**未進行即時檢索**，內容根據既有知識整理。
+> 證據等級：✅ 經典、廣為引用的公式或資源｜⚠️ 數值或細節需再核對原文｜❌ 尚未驗證的構想。
+
+---
+
+## 0. 一張圖看懂
+
+```
+ L0 神經驅動         L1 肌肉          L2 關節動力學      L3 骨架 FK        L4 蒙皮          L5 像素化
+ CPG / LIF   ──a(t)──▶ Hill 簡化 ──τ──▶ 彈簧阻尼+限位 ──θ──▶ 矩陣連乘 ──Tᵢ──▶ LBS 權重 ──p'──▶ 反向取樣+取整
+ (ReLU=發放)       (分段線性)      (半隱式 Euler)     (越末端動越多)    (距離衰減)       (訓練用雙線性)
+                                                                     ▲
+                                              L6 次級運動（頭髮、披風：Verlet 彈簧）
+```
+
+每一層都只輸出一組數字給下一層。這樣**每層都是一個獨立原語**，可以替換：例如 L0 改成鍵盤輸入，或略過 L0–L2，直接手 K 角度 θ。
+
+---
+
+## 1. 資源盤點
+
+### 1.1 Sprite 資料與工具
+
+| 資源 | 用途 | 等級 | 備註 |
+|---|---|---|---|
+| Liberated Pixel Cup（LPC）角色 sprite sheet | 人形行走、攻擊等動作的目標影格，適合當微調目標 | ✅ | 授權為 CC-BY-SA／GPL，使用時要標示來源 |
+| Kenney 素材包 | 部件化角色與道具 | ✅ | 大多是 CC0 |
+| OpenGameArt.org | 各種像素素材 | ✅ | 每件素材授權不同，要逐一檢查 |
+| RotSprite 演算法（Xenowhirl, 2007） | 像素畫旋轉時保留輪廓：先放大 8 倍，再旋轉、縮回 | ✅ | 可以當 L5 的高品質替代方案，但不可微分 |
+| Spine／DragonBones | 2D 骨架動畫業界工具，資料格式就是「骨頭樹＋權重」 | ✅ | 可以把 L3／L4 的參數匯出成這些格式 |
+| Live2D | 網格變形動畫 | ✅ | 概念接近 L4，但用網格而不是骨頭 |
+| CMU Motion Capture Database、Mixamo | 3D 人體動作資料 | ✅ | 投影到 2D 後，可以當 L3 的角度軌跡目標 |
+
+### 1.2 可微分圖像與網路
+
+| 方法 | 跟這條管線的關係 | 等級 |
+|---|---|---|
+| Spatial Transformer Networks（Jaderberg et al., 2015） | 「仿射矩陣 + 雙線性取樣」本身就可微分，等同 L3＋L5 的訓練版 | ✅ |
+| 可微分光柵化（如 SoftRas、DiffVG） | 讓「形狀 → 像素」的梯度能回傳 | ✅ |
+| Pix2Pix／GAN 類 sprite 生成 | 黑盒，產出品質高但無法解釋。可以當 L5 之後的「上色／修飾」頭 | ⚠️ |
+| Neural ODE | 把 L2 的動力學視為連續時間模型來訓練 | ✅ |
+
+### 1.3 物理與人體力學公式
+
+| 公式 | 層 | 等級 |
+|---|---|---|
+| 旋轉：p' = R(θ)(p − c) + c，位移 ≈ r·θ | L3 | ✅ |
+| 前向運動學：T_child = T_parent · R(θᵢ) · Trans(Lᵢ) | L3 | ✅ |
+| Linear Blend Skinning：p' = Σ wᵢ Tᵢ p（Magnenat-Thalmann et al., 1988） | L4 | ✅ |
+| Dual Quaternion Skinning（Kavan et al., 2007）：改善 LBS 在關節處的「糖果紙」塌陷 | L4 | ✅ |
+| 彈簧阻尼：τ = −k(θ − θ₀) − cω；臨界阻尼 c = 2√(kI) | L2 | ✅ |
+| 半隱式 Euler：ω += (τ/I)dt；θ += ω·dt | L2 | ✅ |
+| Verlet 積分：x_{t+1} = 2x_t − x_{t−1} + a·dt² | L6 | ✅ |
+| Position Based Dynamics（Müller et al., 2007）：用距離約束處理布料、頭髮 | L6 | ✅ |
+| IK：CCD、FABRIK（Aristidou & Lasenby, 2011）：從手腳目標反推角度 | L3（反向） | ✅ |
+| 人體節段比例（Winter，引自 Drillis & Contini）：以身高 H 為單位，上臂約 0.186H、前臂約 0.146H、手約 0.108H、大腿約 0.245H、小腿約 0.246H | L3 參數 | ⚠️ 數值要對原書 |
+| 關節活動範圍：例如膝關節約 0°～140° 屈曲，肘約 0°～145° | L2 限位 | ⚠️ 依文獻與族群而異 |
+
+### 1.4 肌肉與神經公式
+
+| 公式 | 層 | 等級 |
+|---|---|---|
+| Hill 肌肉模型（Hill, 1938）：F = a · F_max · f_L(l) · f_V(v) + F_passive | L1 | ✅ 形式；⚠️ 曲線參數 |
+| 肌肉激活動力學：da/dt = (u − a)/τ_act，τ 約數十毫秒 | L1 | ✅ 形式；⚠️ 時間常數 |
+| Hodgkin–Huxley（1952）：完整離子通道模型 | L0 | ✅；但對動畫來說太重 |
+| Leaky Integrate-and-Fire（LIF）：τ dV/dt = −(V − V_rest) + RI，超過閾值就發放 | L0 | ✅ |
+| 中樞模式產生器（CPG）：Matsuoka 振盪器（1985），兩個互相抑制的神經元產生節律 | L0 | ✅ |
+| 神經傳導延遲：Δt = 距離 / 傳導速度（有髓鞘大纖維可達數十 m/s） | L0→L1 | ✅ 形式；⚠️ 數值 |
+
+> 😲 **驚奇面向**：Matsuoka 振盪器的輸出原本就寫成 `y = max(0, x)`，**它本來就是 ReLU 網路**。這可能是生物模型跟 handwired 最自然的接點：步態節律不需要額外轉換，直接就是手寫權重。
+
+---
+
+## 2. 每一層怎麼變成「乘、加、ReLU」
+
+| 層 | 原本的公式 | handwired 寫法 |
+|---|---|---|
+| L0 LIF 發放 | `if (V > θ) spike` | 用 ReLU 階梯：`spike = relu(V−θ)/ε − relu(V−θ−ε)/ε`。訓練時把 ε 放大，讓梯度不會是 0 |
+| L0 CPG | Matsuoka | 原本就是 `max(0, ·)`，直接照抄 |
+| L1 力長曲線 f_L | 鐘形曲線 | 分段線性：三個 ReLU 拼成梯形 |
+| L1 激活 | `da/dt = (u − a)/τ` | 線性的：`a += (u − a)·dt/τ` |
+| L2 關節限位 | `clamp(θ, lo, hi)` | 硬限位：`lo + relu(θ−lo) − relu(θ−hi)`；軟限位：額外加回彈力矩 `−k·relu(θ−hi) + k·relu(lo−θ)` |
+| L2 積分 | Euler | 線性，本來就是乘和加 |
+| L3 旋轉 | cos θ、sin θ | 有三種做法：① θ 當外部參數，R 在層外算好（最簡單）；② 用分段線性逼近 sin 和 cos；③ 狀態直接存 (cos, sin)，旋轉增量 = 小角度矩陣相乘，**全程線性** |
+| L3 FK | 矩陣連乘 | 矩陣乘法 |
+| L4 LBS | Σ wᵢ Tᵢ p | 權重矩陣 W（像素數 × 骨頭數），是一張可以手寫的表 |
+| L4 距離權重 | wᵢ ∝ 1/d | `relu(1 − d/R)` 錐形衰減，再做正規化 |
+| L5 取整 | `round(x)` | ReLU 階梯（handwired 本來就有）；訓練時改用雙線性取樣 |
+| L6 Verlet | 位置更新 | 線性；距離約束的長度要開根號，可以用分段線性逼近 |
+
+### 你的「越遠動越多」在哪一層實現？
+
+- **單一部件**：L3 的 r·θ。
+- **部件連動**：L3 的矩陣連乘。指尖的位移 = 肩、肘、腕三段旋轉的疊加，所以末端動最多。
+- **柔性過渡**：L4 的權重表。關節附近的像素同時受兩根骨頭影響，不會斷開。
+- **延遲甩動**（鞭子、頭髮）：L6，或在 L0→L1 加上傳導延遲。末端比根部晚動、擺幅更大。這是「越遠影響越大」在**時間**上的版本。
+
+---
+
+## 3. 訓練策略：先凍結，再局部解凍
+
+1. **全凍結**：所有權重都由公式和人體比例決定。這時已經可以動，而且每個數字都能解釋。
+2. **解凍 L0、L1 的少數參數**：CPG 頻率、肌肉增益。目標是 LPC 行走影格；損失 = 渲染結果與目標影格的像素差（L5 用雙線性取樣）。
+3. **解凍 L4 權重表**：讓關節處的變形更貼近畫師的手繪。
+4. **永遠保持凍結**：骨架拓樸、關節限位。這些是「物理上不可違反」的規則，也是比黑盒生成模型好的地方。
+
+> ⚖️ **反方觀點與限制**
+> - 像素畫的魅力常來自畫師**刻意違反物理**（誇張、變形、抽格）。純物理管線產出的動作可能「正確但無聊」。對策是在 L3 之後加一層「風格偏移」，讓它可以訓練。
+> - ReLU 階梯在訓練時梯度是 0。要靠「訓練用連續值、顯示時才取整」（直通估計，straight-through）來處理，這是近似。
+> - 2D sprite 沒有深度。手臂繞到身體後面時的圖層順序，需要另外用規則判斷（可以用 ReLU 寫成 if-else）。
+> - 完整的 Hill 模型和 HH 模型對遊戲動畫來說太重，實務上 L0 和 L1 多半會簡化成「CPG + 線性增益」。
+
+---
+
+## 4. 可執行範例
+
+`examples/sprite-arm-chain.mjs`：一條三節手臂（上臂、前臂、手）。由 CPG 產生節律，經過肌肉增益、彈簧阻尼和 ReLU 關節限位，用 FK 算出各節位置，最後渲染成 ASCII 像素格。輸出會列出各節末端的位移量，可以直接看到「越末端動越多」。
+
+```bash
+node examples/sprite-arm-chain.mjs
+```
+
+---
+
+## 5. 參考資料
+
+> 未進行即時檢索；以下為經典文獻的書目資訊，連結請以 DOI 或出版社頁面為準。
+
+- Aristidou, A., & Lasenby, J. (2011). FABRIK: A fast, iterative solver for the inverse kinematics problem. *Graphical Models, 73*(5), 243–260.
+  → 輕量 IK，適合從手腳目標反推 L3 的角度。
+- Hill, A. V. (1938). The heat of shortening and the dynamic constants of muscle. *Proceedings of the Royal Society B, 126*(843), 136–195.
+  → 肌肉力速關係的源頭，L1 的基礎。
+- Hodgkin, A. L., & Huxley, A. F. (1952). A quantitative description of membrane current and its application to conduction and excitation in nerve. *The Journal of Physiology, 117*(4), 500–544.
+  → 神經傳導的經典模型；本管線只取簡化版。
+- Jaderberg, M., Simonyan, K., Zisserman, A., & Kavukcuoglu, K. (2015). Spatial transformer networks. *Advances in Neural Information Processing Systems 28*.
+  → 可微分仿射與取樣，L3＋L5 的訓練版。
+- Kavan, L., Collins, S., Žára, J., & O'Sullivan, C. (2007). Skinning with dual quaternions. *Proceedings of I3D 2007*, 39–46.
+  → 改善 LBS 關節塌陷，L4 的升級選項。
+- Magnenat-Thalmann, N., Laperrière, R., & Thalmann, D. (1988). Joint-dependent local deformations for hand animation and object grasping. *Proceedings of Graphics Interface '88*.
+  → LBS 蒙皮的早期來源。
+- Matsuoka, K. (1985). Sustained oscillations generated by mutually inhibiting neurons with adaptation. *Biological Cybernetics, 52*(6), 367–376.
+  → CPG 振盪器，本身就是 ReLU 形式。
+- Müller, M., Heidelberger, B., Hennix, M., & Ratcliff, J. (2007). Position based dynamics. *Journal of Visual Communication and Image Representation, 18*(2), 109–118.
+  → 頭髮、布料等次級運動（L6）。
+- Winter, D. A. (2009). *Biomechanics and motor control of human movement* (4th ed.). Wiley.
+  → 人體節段比例與質量參數，L3 的骨長依據。
+- chenglou. (n.d.). *handwired* [Computer software]. GitHub. https://github.com/chenglou/handwired
+  → 把程式轉成乘、加、ReLU 的方法來源。

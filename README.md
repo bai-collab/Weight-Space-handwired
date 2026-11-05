@@ -133,6 +133,8 @@ return cond * (a * 2) + (1 - cond) * (a + 10);
 
 ## 6. 可執行範例
 
+> 延伸：[handwired × Sprite 方法](docs/sprite-biomech-method.md)，把神經節律、肌肉、關節、骨架、蒙皮到像素化整條鏈寫成手寫網路，範例在 `node examples/sprite-arm-chain.mjs`。
+
 ```bash
 node examples/handwired-basics.mjs
 ```
