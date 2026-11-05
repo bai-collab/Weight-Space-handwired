@@ -1098,7 +1098,14 @@ function renderThumbs() {
   $('lpc-frames').querySelectorAll('.thumb').forEach(b => {
     const f = +b.dataset.frame, cx = b.querySelector('canvas').getContext('2d');
     cx.imageSmoothingEnabled = false; cx.drawImage(lpcImg, f * 64 + 8, lpcRowY('side'), 48, 64, 8, 0, 48, 64);
-    b.onclick = () => { stopAnim(); stopPlay(); loadLPC(f); };
+    b.onclick = () => {
+      stopAnim(); stopPlay();
+      if (BODY === 'lpc') return loadLPC(f);
+      // 寫實／動漫體型：不切回 LPC，只顯示這一格已反推的姿勢
+      document.querySelectorAll('.thumb').forEach(t => t.setAttribute('aria-pressed', +t.dataset.frame === f));
+      if (lpcRes[f]) { state.pose = {...lpcRes[f].pose}; syncSliders(); drawAll(); $('lpcstat').textContent = `第 ${f + 1} 格的反推姿勢（${LPC_CHARS[lpcSel.c].n}・${lpcAct().n}）`; }
+      else $('lpcstat').textContent = `第 ${f + 1} 格還沒反推。切到 LPC 體型、按「反推整個動作」後，就能在這裡播放。`;
+    };
   });
 }
 // 揮砍、施法會把手舉高：放寬肩、肘的自然姿勢先驗，否則手舉不起來
@@ -1118,7 +1125,12 @@ function selectLPC(c, a) {
   document.querySelectorAll('#lpc-act button').forEach((b, i) => b.setAttribute('aria-pressed', i === a));
   applyActPrior(); lpcRes = LPC_RES[c + '-' + a] ??= [];
   if (charChanged && BODY === 'lpc') buildBody('lpc');
-  renderThumbs(); lpcTable(); lpcBusy(false); loadLPC(0);
+  renderThumbs(); lpcTable(); lpcBusy(false);
+  if (BODY === 'lpc') return loadLPC(0);
+  // 寫實／動漫體型：維持目前體型；這組已有反推結果就直接播放
+  if (lpcRes.filter(Boolean).length >= 2) {
+    startPlay(); $('lpcstat').textContent = `正在播放「${LPC_CHARS[lpcSel.c].n}・${lpcAct().n}」的反推結果。`;
+  } else $('lpcstat').textContent = `「${LPC_CHARS[lpcSel.c].n}・${lpcAct().n}」還沒反推。切到 LPC 體型、按「反推整個動作」後，就能在這裡播放。`;
 }
 function buildLpcUI() {
   $('lpc-char').innerHTML = LPC_CHARS.map((ch, i) => `<button aria-pressed="${i === lpcSel.c}">${ch.n}</button>`).join('');
