@@ -1087,7 +1087,7 @@ const lpcImg = new Image(); let lpcData = null;
 lpcImg.onload = () => {
   const c = document.createElement('canvas'); c.width = lpcImg.width; c.height = lpcImg.height;
   const x = c.getContext('2d'); x.drawImage(lpcImg, 0, 0); lpcData = x.getImageData(0, 0, c.width, c.height);
-  buildLpcUI(); renderThumbs();
+  buildLpcUI(); renderThumbs(); lpcTable(); lpcBusy(false);
 };
 lpcImg.src = LPC_SRC;
 const lpcRowY = view => (lpcSel.c * 6 + lpcSel.a * 2 + (view === 'front' ? 0 : 1)) * 64;   // 正面＝朝下、側面＝朝右
@@ -1117,7 +1117,9 @@ function applyActPrior() {
     if (/El/.test(d.k)) PRIOR[d.id].sig = walk ? 30 : 60;
   }
 }
-const LPC_RES = {};
+// 預先反推好的結果（混合式，5 組角色 × 3 個動作）：打開頁面就能在寫實或動漫體型播放；重新反推會覆蓋
+const LPC_PRESOLVED = /*PRESOLVED*/{}/*END*/;
+const LPC_RES = Object.fromEntries(Object.entries(LPC_PRESOLVED).map(([k, a]) => [k, a.map(r => ({...r, pose: {...r.pose}, ms: 0, pre: true}))]));
 function selectLPC(c, a) {
   stopAnim(); stopPlay();
   const charChanged = c !== lpcSel.c; lpcSel.c = c; lpcSel.a = a;
@@ -1186,7 +1188,7 @@ draw = function (view, T) {
   ctx.drawImage(lpcImg, state.target.frame * 64, lpcRowY(view), 64, 64, -22.5 * k, 14.5 * k, 128 * k, 128 * k);
   ctx.restore();
 };
-let lpcRes = LPC_RES['0-0'] = [];
+let lpcRes = LPC_RES['0-0'] ??= [];
 async function solveLPC(f, warm) {
   loadLPC(f);
   // 揮砍、施法：加上「單手或雙手往前抬」的起點，避免手臂卡在身側的局部最小值
@@ -1199,7 +1201,7 @@ async function solveLPC(f, warm) {
   return lpcRes[f];
 }
 function lpcTable() {
-  const rows = lpcRes.map((r, f) => r ? `<tr><td>${f + 1}</td><td>${(r.iouF * 100).toFixed(1)}%</td><td>${(r.iouS * 100).toFixed(1)}%</td><td>${(r.ms / 1000).toFixed(1)} s</td></tr>` : '').join('');
+  const rows = lpcRes.map((r, f) => r ? `<tr><td>${f + 1}</td><td>${(r.iouF * 100).toFixed(1)}%</td><td>${(r.iouS * 100).toFixed(1)}%</td><td>${r.pre ? '預先' : (r.ms / 1000).toFixed(1) + ' s'}</td></tr>` : '').join('');
   $('lpctbl').innerHTML = `<table><thead><tr><th>格</th><th>正面 IoU</th><th>側面 IoU</th><th>時間</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 $('lpc-solve').onclick = async () => {
