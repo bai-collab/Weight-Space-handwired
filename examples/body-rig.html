@@ -1,0 +1,580 @@
+<title>全身像素骨架</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen&family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* 版面：上方兩個舞台（正面、側面）並排，下方是當前視角的控制台；手機寬度時全部單欄 */
+:root {
+  --bg: #eef1f6; --panel: #ffffff; --ink: #1d2433; --muted: #5b6577; --line: #d3d9e4;
+  --accent: #d9653b; --accent-ink: #ffffff; --stage: #26304a; --stage-line: #34405f; --stage-ink: #c9d2e4;
+  --f-display: "Silkscreen", "Courier New", monospace;
+  --f-body: "Noto Sans TC", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #141a26; --panel: #1c2433; --ink: #e6eaf2; --muted: #9aa5b8; --line: #2e3a50;
+  --accent: #f0875c; --accent-ink: #1a1208; --stage: #0e1320; --stage-line: #1d2740; --stage-ink: #c9d2e4; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #141a26; --panel: #1c2433; --ink: #e6eaf2; --muted: #9aa5b8; --line: #2e3a50;
+  --accent: #f0875c; --accent-ink: #1a1208; --stage: #0e1320; --stage-line: #1d2740; --stage-ink: #c9d2e4; color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 24px 48px; }
+.wrap { max-width: 1120px; margin: 0 auto; display: grid; gap: 18px; }
+header h1 { font-family: var(--f-display); font-weight: 400; font-size: clamp(22px, 4vw, 34px); margin: 0; text-wrap: balance; }
+header p { margin: 4px 0 0; color: var(--muted); max-width: 70ch; }
+.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.25fr); gap: 16px; align-items: start; }
+@media (max-width: 980px) { .top { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .top .panel { grid-column: 1 / -1; } }
+@media (max-width: 520px) { .top { grid-template-columns: 1fr; } }
+.stage { background: var(--stage); border-radius: 6px; padding: 10px; display: grid; gap: 8px; border: 2px solid transparent; cursor: pointer; }
+.stage[aria-current="true"] { border-color: var(--accent); }
+.stage .cap { display: flex; justify-content: space-between; align-items: baseline; color: var(--stage-ink); font: 12px var(--f-mono); }
+.stage .cap b { font: 400 14px var(--f-display); color: #fff; }
+canvas { width: 100%; height: auto; aspect-ratio: 81 / 144; image-rendering: pixelated; display: block; max-width: 100%; }
+.bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.seg button, .chip { font: 500 13px var(--f-body); border: 1px solid var(--line); background: var(--panel); color: var(--ink); padding: 5px 10px; border-radius: 4px; cursor: pointer; }
+.seg { display: inline-flex; gap: 0; }
+.seg button { border-radius: 0; margin-left: -1px; }
+.seg button:first-child { border-radius: 4px 0 0 4px; margin-left: 0; }
+.seg button:last-child { border-radius: 0 4px 4px 0; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); position: relative; }
+.chip:hover { border-color: var(--accent); }
+.legend { display: flex; align-items: center; gap: 8px; font: 12px var(--f-mono); color: var(--muted); }
+.legend i { display: block; width: 140px; height: 8px; border-radius: 2px; background: linear-gradient(90deg, #2b3a67, #3f7f9a, #6cc08b, #f2d35b, #f0875c); }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; display: grid; gap: 12px; min-width: 0; }
+.panel h2 { font: 700 12px var(--f-body); letter-spacing: .08em; color: var(--muted); margin: 0; }
+.panel h2 span { color: var(--accent); }
+.joints { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 4px 18px; }
+.group { display: grid; gap: 2px; }
+.group h3 { font: 600 12px var(--f-body); margin: 6px 0 0; color: var(--muted); }
+.joint { display: grid; grid-template-columns: 3.6em minmax(0, 1fr) 3.4em; gap: 8px; align-items: center; font-size: 13px; }
+.joint output { font: 12px var(--f-mono); text-align: right; font-variant-numeric: tabular-nums; }
+input[type=range] { width: 100%; accent-color: var(--accent); margin: 0; }
+.toggles { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; }
+.toggles label { display: flex; gap: 6px; align-items: center; cursor: pointer; }
+input[type=checkbox] { accent-color: var(--accent); }
+.fit { display: grid; gap: 10px; }
+.fit .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.stat { font: 13px var(--f-mono); font-variant-numeric: tabular-nums; color: var(--muted); }
+.stat b { color: var(--ink); font-weight: 600; }
+button.primary { font: 600 13px var(--f-body); background: var(--accent); color: var(--accent-ink); border: 0; border-radius: 4px; padding: 6px 14px; cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+.err { overflow-x: auto; }
+table { border-collapse: collapse; font: 12px var(--f-mono); font-variant-numeric: tabular-nums; min-width: 100%; }
+th, td { padding: 3px 8px 3px 0; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { font: 500 12px var(--f-body); color: var(--muted); }
+.note { font-size: 13px; color: var(--muted); margin: 0; max-width: 75ch; }
+button:focus-visible, input:focus-visible, .stage:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>全身像素骨架</h1>
+    <p>81×144 像素、15 根骨頭的全身 sprite。每個像素都用所屬骨頭的反矩陣回推到靜止姿勢取色，所以轉一個關節，下游整條肢體都會跟著動，離關節越遠位移越大。</p>
+  </header>
+
+  <div class="bar">
+    <div class="seg" role="group" aria-label="顯示模式">
+      <button id="m-color" aria-pressed="true" data-mode="color">原色</button>
+      <button id="m-heat" aria-pressed="false" data-mode="heat">位移熱圖</button>
+      <button id="m-bone" aria-pressed="false" data-mode="bone">骨頭歸屬</button>
+    </div>
+    <div class="toggles">
+      <label><input id="t-bones" type="checkbox" checked>顯示骨架</label>
+      <label><input id="t-ground" type="checkbox" checked>地面約束</label>
+      <label><input id="t-grid" type="checkbox">像素格線</label>
+    </div>
+    <div class="legend" id="legend" hidden><span>0</span><i></i><span>40 px</span></div>
+  </div>
+
+  <div class="top">
+    <section class="stage" id="st-front" tabindex="0" aria-current="true" aria-label="正面視角，點選以控制">
+      <div class="cap"><b>正面</b><span id="cap-front">冠狀面：外展 / 內收</span></div>
+      <canvas id="cv-front" width="405" height="720"></canvas>
+    </section>
+    <section class="stage" id="st-side" tabindex="0" aria-current="false" aria-label="側面視角，點選以控制">
+      <div class="cap"><b>側面</b><span id="cap-side">矢狀面：屈曲 / 伸展</span></div>
+      <canvas id="cv-side" width="405" height="720"></canvas>
+    </section>
+
+    <section class="panel" aria-label="控制台">
+      <h2>正在控制：<span id="cur">正面</span></h2>
+      <div class="bar" id="presets"></div>
+      <div class="bar">
+        <button class="chip" id="anim">▶ 神經節律驅動</button>
+        <button class="chip" id="reset">回到立正</button>
+      </div>
+      <div class="joints" id="joints"></div>
+
+      <h2>反推姿勢 <span>（給一張目標畫面，找回關節角度）</span></h2>
+      <div class="fit">
+        <div class="row">
+          <button class="chip" id="target">產生隨機目標</button>
+          <button class="primary" id="solve" disabled>開始反推</button>
+          <span class="stat" id="fitstat">尚未設定目標</span>
+        </div>
+        <p class="note">目標以虛線輪廓疊在畫面上。損失＝各骨頭像素重心與目標的距離平方和，加上少量「部位標籤不符」的像素數。這裡用逐關節有限差分搜尋（步長 32° → 1°），再隨機擾動重來 5 輪以跳出局部最小值；改用雙線性軟渲染就能換成真正的梯度下降，之後也能把目標換成 LPC 影格。</p>
+        <div class="err" id="errtbl"></div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+const W = 81, H = 144, GROUND = 137.5, DEG = Math.PI / 180;
+const relu = x => Math.max(0, x);
+const clampR = (x, lo, hi) => lo + relu(x - lo) - relu(x - hi);   // L2 關節限位（ReLU 寫法）
+
+// ---------- 骨架定義 ----------
+// 關節名、父骨頭、各視角的樞紐點、角度符號（讓滑桿正值 = 解剖學上的屈曲 / 外展）、限位
+const JOINTS = [
+  {k: 'pelvis', n: '骨盆', g: '軀幹', p: null},
+  {k: 'chest',  n: '脊椎', g: '軀幹', p: 'pelvis'},
+  {k: 'head',   n: '頸',   g: '軀幹', p: 'chest'},
+  {k: 'rSh', n: '肩', g: '右臂', p: 'chest'}, {k: 'rEl', n: '肘', g: '右臂', p: 'rSh'}, {k: 'rWr', n: '腕', g: '右臂', p: 'rEl'},
+  {k: 'lSh', n: '肩', g: '左臂', p: 'chest'}, {k: 'lEl', n: '肘', g: '左臂', p: 'lSh'}, {k: 'lWr', n: '腕', g: '左臂', p: 'lEl'},
+  {k: 'rHip', n: '髖', g: '右腿', p: 'pelvis'}, {k: 'rKn', n: '膝', g: '右腿', p: 'rHip'}, {k: 'rAn', n: '踝', g: '右腿', p: 'rKn'},
+  {k: 'lHip', n: '髖', g: '左腿', p: 'pelvis'}, {k: 'lKn', n: '膝', g: '左腿', p: 'lHip'}, {k: 'lAn', n: '踝', g: '左腿', p: 'lKn'},
+];
+const IDX = Object.fromEntries(JOINTS.map((j, i) => [j.k, i]));
+// 身高 128 px，關節高度依 Winter 人體比例（肩 0.818H、髖 0.530H、膝 0.285H、踝 0.039H、肘 0.630H、腕 0.485H）
+const Y = f => 137 - f * 128;
+const ySh = Y(0.818), yEl = Y(0.630), yWr = Y(0.485), yHp = Y(0.530), yKn = Y(0.285), yAn = Y(0.039), yNeck = Y(0.87);
+const VIEWS = {
+  front: {
+    name: '正面', cap: '冠狀面：外展 / 內收',
+    pivot: {pelvis: [40.5, yHp], chest: [40.5, yHp - 2], head: [40.5, yNeck + 2],
+      rSh: [24, ySh], rEl: [21.5, yEl], rWr: [19.5, yWr], lSh: [57, ySh], lEl: [59.5, yEl], lWr: [61.5, yWr],
+      rHip: [34, yHp + 2], rKn: [33.5, yKn], rAn: [33.5, yAn], lHip: [47, yHp + 2], lKn: [47.5, yKn], lAn: [47.5, yAn]},
+    sign: {rSh: 1, rEl: 1, rWr: 1, lSh: -1, lEl: -1, lWr: -1, rHip: 1, rKn: -1, rAn: -1, lHip: -1, lKn: 1, lAn: 1, pelvis: 1, chest: 1, head: 1},
+    lim: {pelvis: [-15, 15], chest: [-35, 35], head: [-40, 40], rSh: [-20, 175], lSh: [-20, 175], rEl: [-20, 140], lEl: [-20, 140],
+      rWr: [-40, 40], lWr: [-40, 40], rHip: [-20, 45], lHip: [-20, 45], rKn: [-10, 30], lKn: [-10, 30], rAn: [-25, 25], lAn: [-25, 25]},
+    feet: {rAn: [[30, 137.5], [37, 137.5]], lAn: [[44, 137.5], [51, 137.5]]},
+  },
+  side: {
+    name: '側面', cap: '矢狀面：屈曲 / 伸展（左側為近側）',
+    pivot: {pelvis: [40, yHp], chest: [40, yHp - 2], head: [41, yNeck + 2],
+      rSh: [40, ySh + 1], rEl: [40, yEl], rWr: [40.5, yWr], lSh: [40, ySh + 1], lEl: [40, yEl], lWr: [40.5, yWr],
+      rHip: [40, yHp + 2], rKn: [41, yKn], rAn: [39, yAn], lHip: [40, yHp + 2], lKn: [41, yKn], lAn: [39, yAn]},
+    // 朝右站：向下的肢體往前屈曲 = 負角；向上的軀幹、頭往前 = 正角；膝屈曲 = 正角
+    sign: {rSh: -1, lSh: -1, rEl: -1, lEl: -1, rWr: -1, lWr: -1, rHip: -1, lHip: -1, rKn: 1, lKn: 1, rAn: -1, lAn: -1, pelvis: 1, chest: 1, head: 1},
+    lim: {pelvis: [-20, 25], chest: [-30, 80], head: [-50, 60], rSh: [-60, 180], lSh: [-60, 180], rEl: [0, 145], lEl: [0, 145],
+      rWr: [-70, 80], lWr: [-70, 80], rHip: [-25, 125], lHip: [-25, 125], rKn: [0, 145], lKn: [0, 145], rAn: [-45, 25], lAn: [-45, 25]},
+    feet: {rAn: [[34, 137.5], [51, 137.5]], lAn: [[34, 137.5], [51, 137.5]]},
+  },
+};
+
+// ---------- 靜止姿勢的形狀（全部在靜止座標下定義；渲染時用反矩陣回推） ----------
+// cap = 錐形膠囊 [a, b, ra, rb]；ell = 橢圓 [cx, cy, rx, ry]；layer 大的畫在前面；far = 遠側（加深）
+function shapes(view) {
+  const P = VIEWS[view].pivot, S = [];
+  const cap = (bone, a, b, ra, rb, mat, layer, far = false) => S.push({kind: 'cap', bone: IDX[bone], a, b, ra, rb, mat, layer, far});
+  const ell = (bone, c, rx, ry, mat, layer, far = false) => S.push({kind: 'ell', bone: IDX[bone], c, rx, ry, mat, layer, far});
+  const end = (j, dx, dy) => [P[j][0] + dx, P[j][1] + dy];
+  if (view === 'front') {
+    for (const [s, L, far] of [['r', 0, false], ['l', 0, false]]) {
+      cap(s + 'Hip', P[s + 'Hip'], P[s + 'Kn'], 6.2, 5, 'pants', 1);
+      cap(s + 'Kn', P[s + 'Kn'], P[s + 'An'], 4.8, 3.4, 'pants', 1);
+      cap(s + 'An', end(s + 'An', 0, 1.5), end(s + 'An', 0, 2.2), 3.6, 3.6, 'shoe', 1);
+    }
+    cap('pelvis', [35, yHp + 1], [46, yHp + 1], 7, 7, 'pants', 2);
+    cap('pelvis', [33.5, yHp - 3.5], [47.5, yHp - 3.5], 1.6, 1.6, 'belt', 3);
+    cap('chest', [40.5, ySh + 3], [40.5, yHp - 6], 14, 11, 'shirt', 3);
+    cap('chest', [28, ySh + 1.5], [53, ySh + 1.5], 4.2, 4.2, 'shirt', 3);
+    cap('head', [40.5, yNeck - 1], [40.5, yNeck + 5], 3.6, 3.8, 'skin', 2);
+    ell('head', [40.5, yNeck - 9], 8.6, 10, 'head', 4);
+    for (const s of ['r', 'l']) {
+      cap(s + 'Sh', P[s + 'Sh'], P[s + 'El'], 4.6, 3.7, 'shirt', 5);
+      cap(s + 'El', P[s + 'El'], P[s + 'Wr'], 3.4, 2.6, 'skin', 5);
+      cap(s + 'Wr', end(s + 'Wr', 0, 1), end(s + 'Wr', s === 'r' ? -0.5 : 0.5, 9), 3, 2.6, 'skin', 5);
+    }
+  } else {
+    // 遠側（右）在後、近側（左）在前
+    const limb = (s, far) => {
+      const Lb = far ? 0 : 6, Ll = far ? 1 : 3;
+      cap(s + 'Hip', P[s + 'Hip'], P[s + 'Kn'], 6.6, 5, 'pants', Ll, far);
+      cap(s + 'Kn', P[s + 'Kn'], P[s + 'An'], 4.8, 3.3, 'pants', Ll, far);
+      cap(s + 'An', [36.5, yAn + 1.6], [48.5, yAn + 2.6], 3, 2.2, 'shoe', Ll, far);
+      cap(s + 'Sh', P[s + 'Sh'], P[s + 'El'], 4.4, 3.6, 'shirt', Lb, far);
+      cap(s + 'El', P[s + 'El'], P[s + 'Wr'], 3.3, 2.6, 'skin', Lb, far);
+      cap(s + 'Wr', end(s + 'Wr', 0.5, 1), end(s + 'Wr', 1.5, 9), 2.8, 2.3, 'skin', Lb, far);
+    };
+    limb('r', true); limb('l', false);
+    cap('pelvis', [40, yHp], [40, yHp + 3], 8, 7.5, 'pants', 2);
+    cap('pelvis', [40, yHp - 3.5], [40, yHp - 3.5], 8.2, 8.2, 'belt', 2);
+    cap('chest', [41, ySh + 4], [40, yHp - 6], 9, 8.4, 'shirt', 4);
+    cap('head', [40.5, yNeck - 1], [41, yNeck + 5], 3.4, 3.6, 'skin', 4);
+    ell('head', [41, yNeck - 9], 8.2, 10, 'head', 5);
+    ell('head', [49.5, yNeck - 8], 1.6, 1.6, 'skin', 5);   // 鼻子
+  }
+  S.forEach((s, i) => s.id = i);
+  return S.sort((a, b) => b.layer - a.layer);
+}
+
+// ---------- 調色盤（像素畫固定色，不隨主題變） ----------
+const MAT = {
+  skin:  ['#f6cfa8', '#f0b98c', '#cf9068'],
+  shirt: ['#6b9ae6', '#4a7bd1', '#33589c'],
+  pants: ['#4c5276', '#3a3f5c', '#272a40'],
+  shoe:  ['#8a5634', '#6b3f26', '#4a2a19'],
+  belt:  ['#3a3044', '#2a2230', '#1c1622'],
+  hair:  ['#6a4636', '#4a3026', '#2e1d17'],
+};
+const OUTLINE = [26, 22, 34];
+const hex = h => [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16));
+const MATRGB = Object.fromEntries(Object.entries(MAT).map(([k, v]) => [k, v.map(hex)]));
+
+// ---------- L3：仿射矩陣 ----------
+const mul = (A, B) => [A[0]*B[0]+A[1]*B[3], A[0]*B[1]+A[1]*B[4], A[0]*B[2]+A[1]*B[5]+A[2],
+                       A[3]*B[0]+A[4]*B[3], A[3]*B[1]+A[4]*B[4], A[3]*B[2]+A[4]*B[5]+A[5]];
+const rotAbout = (th, [cx, cy]) => { const c = Math.cos(th), s = Math.sin(th); return [c, -s, cx - c*cx + s*cy, s, c, cy - s*cx - c*cy]; };
+const apply = (M, [x, y]) => [M[0]*x + M[1]*y + M[2], M[3]*x + M[4]*y + M[5]];
+const inv = M => { const d = M[0]*M[4] - M[1]*M[3], a = M[4]/d, b = -M[1]/d, e = -M[3]/d, f = M[0]/d;
+  return [a, b, -(a*M[2] + b*M[5]), e, f, -(e*M[2] + f*M[5])]; };
+
+function fk(view, pose, ground) {
+  const V = VIEWS[view];
+  const build = dy => {
+    const T = [];
+    JOINTS.forEach((j, i) => {
+      const lim = V.lim[j.k], th = clampR(pose[j.k] ?? 0, lim[0], lim[1]) * V.sign[j.k] * DEG;
+      const R = rotAbout(th, V.pivot[j.k]);
+      T[i] = j.p ? mul(T[IDX[j.p]], R) : mul([1, 0, 0, 0, 1, dy], R);
+    });
+    return T;
+  };
+  let T = build(0);
+  if (ground) {   // 地面約束：最低的腳底點貼地（只用 max，即 ReLU 的推廣）
+    let low = -Infinity;
+    for (const [k, pts] of Object.entries(V.feet)) for (const p of pts) low = Math.max(low, apply(T[IDX[k]], p)[1]);
+    T = build(GROUND - low);
+  }
+  return T;
+}
+
+// ---------- L5：反向映射渲染（每個目標像素 → 各骨頭反矩陣 → 靜止座標 → 形狀測試） ----------
+function hit(s, q) {
+  if (s.kind === 'ell') {
+    const dx = (q[0] - s.c[0]) / s.rx, dy = (q[1] - s.c[1]) / s.ry;
+    return dx*dx + dy*dy <= 1 ? {t: dx, u: dy} : null;
+  }
+  const [ax, ay] = s.a, bx = s.b[0] - ax, by = s.b[1] - ay, L2 = bx*bx + by*by || 1;
+  const h = Math.min(1, Math.max(0, ((q[0]-ax)*bx + (q[1]-ay)*by) / L2));
+  const px = q[0] - ax - h*bx, py = q[1] - ay - h*by, r = s.ra + (s.rb - s.ra) * h;
+  const d2 = px*px + py*py;
+  if (d2 > r*r) return null;
+  const len = Math.sqrt(L2), side = (px * by - py * bx) / (len * r);   // 橫向位置 −1…1，用來打光
+  return {t: L2 === 1 && s.a === s.b ? px / r : side, u: h};
+}
+function render(view, pose, ground) {
+  const SH = SHAPES[view], T = fk(view, pose, ground), Ti = T.map(inv);
+  const lab = new Int16Array(W * H).fill(-1), info = new Array(W * H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const p = [x + 0.5, y + 0.5];
+    for (const s of SH) {
+      const q = apply(Ti[s.bone], p), r = hit(s, q);
+      if (r) { lab[y*W + x] = s.id; info[y*W + x] = {s, q, r}; break; }
+    }
+  }
+  return {lab, info, T};
+}
+function shade(view, s, q, r) {
+  let m = s.mat, tone = r.t < -0.35 ? 0 : r.t > 0.45 ? 2 : 1;
+  if (m === 'head') {
+    const [cx, cy] = s.c, dx = q[0] - cx, dy = q[1] - cy;
+    if (view === 'front') {
+      if (dy < -4.5 || (Math.abs(dx) > 6.6 && dy < 2)) m = 'hair';
+      else if (Math.abs(Math.abs(dx) - 3.6) < 0.8 && dy > -1 && dy < 1.6) return OUTLINE;   // 眼睛
+      else if (Math.abs(dx) < 1.6 && dy > 5 && dy < 6) return hex('#b4594a');                 // 嘴
+      else m = 'skin';
+    } else {
+      if (dy < -4.5 || dx < -3.5) m = 'hair';
+      else if (Math.abs(dx - 4.2) < 0.8 && dy > -1 && dy < 1.6) return OUTLINE;
+      else if (Math.abs(dx + 1.3) < 1.2 && Math.abs(dy - 0.8) < 2) { m = 'skin'; tone = 2; }        // 耳朵
+      else m = 'skin';
+    }
+  }
+  let c = MATRGB[m][tone];
+  if (s.far) c = c.map(v => v * 0.72);
+  return c;
+}
+function heat(t) {
+  const st = [[43,58,103],[63,127,154],[108,192,139],[242,211,91],[240,135,92]];
+  t = Math.min(1, Math.max(0, t)) * (st.length - 1); const i = Math.min(st.length - 2, Math.floor(t)), f = t - i;
+  return st[i].map((v, k) => v + (st[i+1][k] - v) * f);
+}
+const BONECOL = ['#9aa3b8','#e0e0e0','#f2d35b','#e57373','#f0875c','#f6b26b','#64b5f6','#4fc3f7','#81d4fa','#ba68c8','#ce93d8','#e1bee7','#81c784','#a5d6a7','#c8e6c9'].map(hex);
+
+// ---------- 狀態 ----------
+const SHAPES = {front: shapes('front'), side: shapes('side')};
+const PRESETS = {
+  front: {
+    '立正': {rSh: 6, lSh: 6},
+    '揮手': {rSh: 6, lSh: 150, lEl: 40, lWr: 10, head: -8, chest: 4},
+    '開合跳': {rSh: 160, lSh: 160, rEl: 10, lEl: 10, rHip: 28, lHip: 28},
+    '側彎': {chest: 28, head: 10, rSh: 20, lSh: 90, lEl: 60, pelvis: -4},
+  },
+  side: {
+    '立正': {lSh: 4, rSh: 4, lEl: 8, rEl: 8},
+    '走路': {lHip: 25, lKn: 8, lAn: 5, rHip: -15, rKn: 20, rAn: -15, lSh: -20, lEl: 20, rSh: 25, rEl: 30, chest: 4},
+    '深蹲': {lHip: 100, rHip: 100, lKn: 120, rKn: 120, lAn: 25, rAn: 25, chest: 35, head: -30, lSh: 85, rSh: 85, lEl: 5, rEl: 5, pelvis: 10},
+    '踢腿': {lHip: 90, lKn: 10, lAn: 10, rHip: 0, rKn: 5, chest: -10, lSh: -30, lEl: 40, rSh: 60, rEl: 20},
+  },
+};
+const state = {
+  view: 'front', mode: 'color',
+  pose: {front: {...PRESETS.front['立正']}, side: {...PRESETS.side['走路']}},
+  target: {front: null, side: null},
+  anim: false,
+};
+const $ = id => document.getElementById(id);
+const cvs = {front: $('cv-front'), side: $('cv-side')};
+const off = document.createElement('canvas'); off.width = W; off.height = H;
+const octx = off.getContext('2d');
+
+function draw(view) {
+  const ground = $('t-ground').checked, {lab, info, T} = render(view, state.pose[view], ground);
+  const img = octx.createImageData(W, H), css = getComputedStyle(document.documentElement);
+  const bg = hex(css.getPropertyValue('--stage').trim()), bgl = hex(css.getPropertyValue('--stage-line').trim());
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const i = y*W + x; let c;
+    if (lab[i] < 0) c = y > GROUND ? bgl : bg;
+    else {
+      const {s, q, r} = info[i];
+      // 輪廓：鄰居是背景，或鄰居屬於「更後面圖層的其他骨頭」
+      let edge = false;
+      for (const [dx, dy] of [[1,0],[-1,0],[0,1],[0,-1]]) {
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) { edge = true; break; }
+        const n = lab[ny*W + nx];
+        if (n < 0) { edge = true; break; }
+        const ns = info[ny*W + nx].s;
+        if (ns.layer < s.layer && ns.bone !== s.bone && Math.abs(ns.layer - s.layer) > 0 && !(sameLimb(view, ns, s))) { edge = true; break; }
+      }
+      if (state.mode === 'heat') c = heat(Math.hypot(x + 0.5 - q[0], y + 0.5 - q[1]) / 40);
+      else if (state.mode === 'bone') c = BONECOL[s.bone].map(v => s.far ? v * 0.7 : v);
+      else c = shade(view, s, q, r);
+      if (edge && state.mode === 'color') c = OUTLINE;
+      else if (edge) c = c.map(v => v * 0.55);
+    }
+    img.data.set([c[0], c[1], c[2], 255], i * 4);
+  }
+  octx.putImageData(img, 0, 0);
+  const cv = cvs[view], ctx = cv.getContext('2d'), k = cv.width / W;
+  ctx.imageSmoothingEnabled = false; ctx.drawImage(off, 0, 0, cv.width, cv.height);
+  if ($('t-grid').checked) {
+    ctx.fillStyle = 'rgba(255,255,255,.07)';
+    for (let x = 0; x <= W; x++) ctx.fillRect(x * k, 0, 1, cv.height);
+    for (let y = 0; y <= H; y++) ctx.fillRect(0, y * k, cv.width, 1);
+  }
+  // 目標輪廓
+  const tg = state.target[view];
+  if (tg) {
+    ctx.fillStyle = css.getPropertyValue('--accent').trim();
+    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+      const a = tg.lab[y*W + x] >= 0;
+      if (!a) continue;
+      const e = [[1,0],[-1,0],[0,1],[0,-1]].some(([dx, dy]) => (tg.lab[(y+dy)*W + x + dx] ?? -1) < 0);
+      if (e && (x + y) % 2 === 0) ctx.fillRect(x * k + 1, y * k + 1, k - 2, k - 2);
+    }
+  }
+  if ($('t-bones').checked) {
+    const P = VIEWS[view].pivot;
+    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.fillStyle = '#fff';
+    JOINTS.forEach((j, i) => {
+      const a = apply(T[i], P[j.k]);
+      JOINTS.forEach(c => { if (c.p === j.k) {
+        const from = j.k === 'chest' && c.k !== 'head' ? apply(T[i], P.head) : a;   // 肩膀從頸根連出
+        const b = apply(T[i], P[c.k]); ctx.beginPath(); ctx.moveTo(from[0]*k, from[1]*k); ctx.lineTo(b[0]*k, b[1]*k); ctx.stroke(); } });
+      ctx.beginPath(); ctx.arc(a[0]*k, a[1]*k, 3.2, 0, 7); ctx.fill();
+    });
+  }
+}
+function sameLimb(view, a, b) {   // 同一條肢體上相鄰的骨頭之間不畫輪廓（關節處接得平順）
+  const ga = JOINTS[a.bone].g, gb = JOINTS[b.bone].g;
+  return ga === gb && ga !== '軀幹' && a.far === b.far && a.mat !== 'shoe' && b.mat !== 'shoe';
+}
+const drawAll = () => { draw('front'); draw('side'); };
+
+// ---------- 控制台 ----------
+function buildPanel() {
+  const V = VIEWS[state.view], pose = state.pose[state.view];
+  $('cur').textContent = V.name;
+  $('presets').innerHTML = Object.keys(PRESETS[state.view]).map(n => `<button class="chip" data-preset="${n}">${n}</button>`).join('');
+  const groups = {};
+  JOINTS.forEach(j => (groups[j.g] ??= []).push(j));
+  const side = state.view === 'side';
+  $('joints').innerHTML = Object.entries(groups).map(([g, js]) => {
+    const label = side && g.startsWith('右') ? g + '（遠）' : side && g.startsWith('左') ? g + '（近）' : g;
+    return `<div class="group"><h3>${label}</h3>` + js.map(j => {
+      const [lo, hi] = V.lim[j.k], v = pose[j.k] ?? 0;
+      return `<div class="joint"><label for="j-${j.k}">${j.n}</label><input id="j-${j.k}" data-k="${j.k}" type="range" min="${lo}" max="${hi}" value="${v}"><output id="o-${j.k}">${Math.round(v)}°</output></div>`;
+    }).join('') + '</div>';
+  }).join('');
+  $('presets').querySelectorAll('button').forEach(b => b.onclick = () => { stopAnim(); state.pose[state.view] = {...PRESETS[state.view][b.dataset.preset]}; buildPanel(); drawAll(); });
+  $('joints').querySelectorAll('input').forEach(inp => inp.oninput = () => {
+    stopAnim(); state.pose[state.view][inp.dataset.k] = +inp.value; $('o-' + inp.dataset.k).textContent = inp.value + '°'; draw(state.view);
+  });
+  updateFitUI();
+}
+function syncSliders() {
+  const pose = state.pose[state.view];
+  JOINTS.forEach(j => { const i = $('j-' + j.k); if (i) { i.value = pose[j.k] ?? 0; $('o-' + j.k).textContent = Math.round(pose[j.k] ?? 0) + '°'; } });
+}
+function selectView(v) {
+  state.view = v;
+  ['front', 'side'].forEach(x => $('st-' + x).setAttribute('aria-current', x === v));
+  buildPanel();
+}
+['front', 'side'].forEach(v => {
+  $('st-' + v).addEventListener('click', () => selectView(v));
+  $('st-' + v).addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectView(v); } });
+});
+document.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click', () => {
+  state.mode = b.dataset.mode;
+  document.querySelectorAll('[data-mode]').forEach(x => x.setAttribute('aria-pressed', x === b));
+  $('legend').hidden = state.mode !== 'heat'; drawAll();
+}));
+['t-bones', 't-ground', 't-grid'].forEach(id => $(id).addEventListener('change', drawAll));
+$('reset').onclick = () => { stopAnim(); state.pose[state.view] = {...PRESETS[state.view]['立正']}; syncSliders(); drawAll(); };
+
+// ---------- L0–L2：Matsuoka 節律 → 傳導延遲 → 彈簧阻尼 + ReLU 限位 ----------
+const cpg = {x1: 0.1, x2: 0, v1: 0, v2: 0}, hist = [];
+const sim = {front: {}, side: {}};   // 每個關節的 {th, om}
+let raf = 0, amp = 0.3;
+function cpgStep(dt) {
+  const y1 = relu(cpg.x1), y2 = relu(cpg.x2);
+  cpg.x1 += dt / 0.09 * (-cpg.x1 - 2.5 * cpg.v1 - 2 * y2 + 1);
+  cpg.x2 += dt / 0.09 * (-cpg.x2 - 2.5 * cpg.v2 - 2 * y1 + 1);
+  cpg.v1 += dt / 0.18 * (-cpg.v1 + y1); cpg.v2 += dt / 0.18 * (-cpg.v2 + y2);
+  const u = y1 - y2; amp = Math.max(amp * 0.999, Math.abs(u));
+  hist.push(u / amp); if (hist.length > 120) hist.shift();
+}
+const sig = d => hist[Math.max(0, hist.length - 1 - d)] ?? 0;   // d 步之前的訊號（傳導延遲）
+function targets(view) {
+  const s = sig(0), s2 = sig(12), lag = sig(24);
+  if (view === 'side') return {   // 走路：左右反相，膝與手肘延遲
+    lHip: 8 + 26 * s, rHip: 8 - 26 * s, lKn: 6 + 45 * relu(-s2), rKn: 6 + 45 * relu(s2),
+    lAn: 4 * s, rAn: -4 * s, lSh: -24 * s, rSh: 24 * s, lEl: 18 + 12 * relu(lag), rEl: 18 + 12 * relu(-lag),
+    chest: 5, head: -3, pelvis: 2 * s,
+  };
+  const o = (s + 1) / 2, ol = (sig(10) + 1) / 2;   // 開合跳
+  return {rSh: 8 + 150 * ol, lSh: 8 + 150 * ol, rEl: 10 * ol, lEl: 10 * ol, rHip: 3 + 24 * o, lHip: 3 + 24 * o, rAn: -6 * o, lAn: -6 * o, head: 0};
+}
+function animStep() {
+  for (let n = 0; n < 2; n++) {
+    cpgStep(1 / 120);
+    for (const view of ['front', 'side']) {
+      const tg = targets(view), V = VIEWS[view], pose = state.pose[view];
+      for (const j of JOINTS) {
+        const st = sim[view][j.k] ??= {th: pose[j.k] ?? 0, om: 0};
+        const goal = tg[j.k] ?? 0, [lo, hi] = V.lim[j.k];
+        st.om += (90 * (goal - st.th) - 19 * st.om - 600 * relu(st.th - hi) + 600 * relu(lo - st.th)) / 120;
+        st.th += st.om / 120;
+        pose[j.k] = st.th;
+      }
+    }
+  }
+  syncSliders(); drawAll();
+  raf = requestAnimationFrame(animStep);
+}
+function stopAnim() { if (!state.anim) return; state.anim = false; cancelAnimationFrame(raf); $('anim').textContent = '▶ 神經節律驅動'; }
+$('anim').onclick = () => {
+  if (state.anim) return stopAnim();
+  state.anim = true; $('anim').textContent = '■ 停止';
+  for (const v of ['front', 'side']) { sim[v] = {}; }
+  animStep();
+};
+
+// ---------- 反推：給目標部位標籤圖，逐關節有限差分搜尋 ----------
+// 損失 = 各骨頭像素重心距離² 的總和（平滑、好搜尋）＋ 0.05 × 部位標籤不符的像素數
+function boneStats(view, lab) {
+  const SH = SHAPES[view], boneOf = new Int16Array(SH.length + 1);
+  SH.forEach(s => boneOf[s.id] = s.bone);
+  const sx = new Float64Array(JOINTS.length), sy = new Float64Array(JOINTS.length), n = new Float64Array(JOINTS.length);
+  const bl = new Int16Array(lab.length);
+  for (let i = 0; i < lab.length; i++) {
+    const b = lab[i] < 0 ? -1 : boneOf[lab[i]]; bl[i] = b;
+    if (b >= 0) { sx[b] += i % W; sy[b] += (i / W) | 0; n[b]++; }
+  }
+  return {bl, c: [...n].map((m, b) => m ? [sx[b] / m, sy[b] / m] : null)};
+}
+function lossParts(view, pose, tg) {
+  const a = boneStats(view, render(view, pose, $('t-ground').checked).lab), t = tg.stats ??= boneStats(view, tg.lab);
+  let cen = 0, mis = 0;
+  for (let b = 0; b < JOINTS.length; b++) {
+    const p = a.c[b], q = t.c[b];
+    cen += p && q ? (p[0] - q[0]) ** 2 + (p[1] - q[1]) ** 2 : 400;   // 被完全遮住的骨頭給固定懲罰
+  }
+  for (let i = 0; i < a.bl.length; i++) if (a.bl[i] !== t.bl[i]) mis++;
+  return {L: cen + 0.05 * mis, mis};
+}
+const loss = (view, pose, tg) => lossParts(view, pose, tg).L;
+function updateFitUI(text) {
+  const tg = state.target[state.view];
+  $('solve').disabled = !tg || solving;
+  $('fitstat').innerHTML = text ?? (tg ? `目標已設定，不符像素 <b>${lossParts(state.view, state.pose[state.view], tg).mis}</b>` : '尚未設定目標');
+  if (!tg) $('errtbl').innerHTML = '';
+}
+$('target').onclick = () => {
+  stopAnim();
+  const V = VIEWS[state.view], base = PRESETS[state.view][state.view === 'side' ? '走路' : '揮手'], truth = {};
+  for (const j of JOINTS) {   // 在預設姿勢附近隨機擾動，避免出現不自然姿勢
+    const [lo, hi] = V.lim[j.k], spread = ['pelvis', 'head'].includes(j.k) ? 8 : 30;
+    truth[j.k] = Math.round(clampR((base[j.k] ?? 0) + (Math.random() * 2 - 1) * spread, lo, hi));
+  }
+  state.target[state.view] = {...render(state.view, truth, $('t-ground').checked), truth};
+  state.pose[state.view] = {...PRESETS[state.view]['立正']};
+  syncSliders(); drawAll(); updateFitUI(); $('errtbl').innerHTML = '';
+};
+let solving = false;
+$('solve').onclick = async () => {
+  const view = state.view, tg = state.target[view], V = VIEWS[view];
+  if (!tg) return; stopAnim(); solving = true; updateFitUI();
+  const pose = state.pose[view]; let best = loss(view, pose, tg), it = 0;
+  const order = ['pelvis', 'chest', 'rHip', 'lHip', 'rSh', 'lSh', 'rKn', 'lKn', 'rEl', 'lEl', 'head', 'rAn', 'lAn', 'rWr', 'lWr'];
+  const descend = async (steps, tag) => {
+    for (const step of steps) {
+      let improved = true;
+      while (improved) {
+        improved = false;
+        for (const k of order) {
+          for (const d of [step, -step]) {
+            const [lo, hi] = V.lim[k], old = pose[k] ?? 0, nv = clampR(old + d, lo, hi);
+            if (nv === old) continue;
+            pose[k] = nv; const L = loss(view, pose, tg); it++;
+            if (L < best) { best = L; improved = true; break; } else pose[k] = old;
+          }
+        }
+        syncSliders(); draw(view);
+        $('fitstat').innerHTML = `${tag}・步長 ${step}°・評估 <b>${it}</b> 次・損失 <b>${best.toFixed(1)}</b>`;
+        await new Promise(r => setTimeout(r, 0));
+      }
+    }
+  };
+  await descend([32, 16, 8, 4, 2, 1], '第 1 輪');
+  // 跳出局部最小值：從目前最好的解隨機擾動幾個關節再下降，變好才保留
+  for (let round = 2; round <= 6; round++) {
+    const keep = {...pose}, keepL = best;
+    for (const k of order) if (Math.random() < 0.4) { const [lo, hi] = V.lim[k]; pose[k] = clampR((pose[k] ?? 0) + (Math.random() * 2 - 1) * 40, lo, hi); }
+    best = loss(view, pose, tg);
+    await descend([16, 8, 4, 2, 1], `第 ${round} 輪`);
+    if (best >= keepL) { Object.assign(pose, keep); best = keepL; }
+  }
+  syncSliders(); draw(view);
+  solving = false;
+  $('fitstat').innerHTML = `完成：評估 <b>${it}</b> 次，不符像素剩 <b>${lossParts(view, pose, tg).mis}</b>`;
+  $('solve').disabled = false;
+  const rows = JOINTS.map(j => {
+    const t = tg.truth[j.k] ?? 0, g = Math.round(pose[j.k] ?? 0);
+    return `<tr><td>${j.g}・${j.n}</td><td>${t}°</td><td>${g}°</td><td>${Math.abs(t - g)}°</td></tr>`;
+  });
+  $('errtbl').innerHTML = `<table><thead><tr><th>關節</th><th>真值</th><th>反推</th><th>誤差</th></tr></thead><tbody>${rows.join('')}</tbody></table>`;
+};
+
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawAll);
+selectView('front');
+drawAll();
+</script>
