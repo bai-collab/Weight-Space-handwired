@@ -135,6 +135,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
           <button class="primary" id="lpc-solve">反推這一格</button>
           <button class="chip" id="lpc-cycle">反推整個走路循環</button>
           <button class="chip" id="lpc-play" disabled>▶ 播放反推結果</button>
+          <button class="chip" id="lpc-real" disabled>套用到寫實體型</button>
         </div>
         <div class="stat" id="lpcstat">點一格影格，正面（朝下走）與側面（朝右走）的輪廓會成為反推目標。</div>
         <div class="tbl" id="lpctbl"></div>
@@ -294,10 +295,10 @@ function buildLPC() {
     cap(sd + 'Wr', w, [w[0], w[1] + 7, w[2] + 0.6], 4.8, 4.4, 'skin');
   }
   ell('pelvis', LP(31.5, 48.5), [16, 6, 16], 'skin');
-  ell('chest', LP(31.5, 41.5, 0), [19, 16, 19], 'skin');
-  ell('chest', LP(31.5, 34.4), [20.5, 5.5, 15], 'skin');
+  ell('chest', LP(31.5, 41.5, -1.5), [19, 16, 19], 'skin');
+  ell('chest', LP(31.5, 34.4, -1.5), [20.5, 5.5, 15], 'skin');
   cap('head', LP(31.5, 30.5), LP(31.5, 33.5), 6, 6, 'skin');
-  ell('head', LP(31.5, 23.4, 1.2), [22, 17.5, 20], 'head', {face: true, bald: true});
+  ell('head', LP(31.5, 24.4, -0.3), [22, 17.5, 20], 'head', {face: true, bald: true});
   ell('head', LP(31.5, 28.6, 1.2), [20, 9, 17], 'skin');   // 下巴：LPC 的頭偏方
 }
 let BODY = 'real';
@@ -1029,18 +1030,30 @@ $('lpc-cycle').onclick = async () => {
   $('lpcstat').innerHTML = `走路循環完成：平均輪廓重疊率 正面 <b>${(m('iouF') * 100).toFixed(1)}%</b>、側面 <b>${(m('iouS') * 100).toFixed(1)}%</b>，共 ${(m('ms') * 9 / 1000).toFixed(0)} s。按「播放反推結果」看骨架照著 LPC 走。`;
   updateFitUI('');
 };
-function lpcBusy(b) { ['lpc-solve', 'lpc-cycle'].forEach(id => $(id).disabled = b); $('lpc-play').disabled = b || lpcRes.filter(Boolean).length < 2; }
+function lpcBusy(b) { ['lpc-solve', 'lpc-cycle'].forEach(id => $(id).disabled = b); $('lpc-play').disabled = $('lpc-real').disabled = b || lpcRes.filter(Boolean).length < 2; }
 let playTimer = 0;
 function stopPlay() { if (!playTimer) return; clearInterval(playTimer); playTimer = 0; $('lpc-play').textContent = '▶ 播放反推結果'; }
 $('lpc-play').onclick = () => {
   if (playTimer) return stopPlay();
+  if (BODY !== 'lpc') { setBody('lpc'); loadLPC(1); }   // 從寫實體型切回來：重新載入 LPC 目標
+  startPlay();
+};
+function startPlay() {
   const frames = lpcRes.map((r, f) => r ? f : -1).filter(f => f >= 1);   // 第 1 格是站姿，循環從第 2 格開始
   let i = 0; $('lpc-play').textContent = '■ 停止播放';
   playTimer = setInterval(() => {
-    const f = frames[i++ % frames.length]; state.target.frame = f;
-    state.target.lab = state.target.lab; state.pose = {...lpcRes[f].pose}; syncSliders(); drawAll();
+    const f = frames[i++ % frames.length]; if (state.target) state.target.frame = f;
+    state.pose = {...lpcRes[f].pose}; syncSliders(); drawAll();
     document.querySelectorAll('.thumb').forEach(b => b.setAttribute('aria-pressed', +b.dataset.frame === f));
   }, 110);
+};
+
+// 步態移植：兩種體型共用同一組 22 個自由度，角度原封不動套到寫實骨架上播放。
+// LPC 是 Q 版（腿短、頭大），同樣的角度在寫實體型上步幅會比較大；這裡不做比例換算。
+$('lpc-real').onclick = () => {
+  stopAnim(); stopPlay(); setBody('real');
+  $('lpcstat').innerHTML = `寫實體型正照著 LPC 反推出的角度走（${lpcRes.filter(Boolean).length} 格，角度直接套用、不做比例換算）。按「播放反推結果」切回 LPC 體型對照。`;
+  startPlay();
 };
 
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawAll);
