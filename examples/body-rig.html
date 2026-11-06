@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>全身像素骨架</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -649,7 +650,8 @@ function render(view, T, full = true) {
     if (s.kind === 'cap') {
       let Aw = shapeW(T, s, s.A), Bw = shapeW(T, s, s.B);
       const sf = softOf(s); if (sf) { Aw = add(Aw, sf.d.map(v => v * s.sA)); Bw = add(Bw, sf.d.map(v => v * s.sB)); }   // 軟組織：大腿只有靠髖的一端跟著晃
-      const a = V.proj(Aw), b = V.proj(Bw), da = V.depth(Aw), db = V.depth(Bw), r = Math.max(s.ra, s.rb);
+      const kz = view === 'side' && s.kz ? s.kz : 1;   // 橢圓截面：側面看到的粗細 = 正面粗細 × kz（照片體型用側面圖量）
+      const a = V.proj(Aw), b = V.proj(Bw), da = V.depth(Aw), db = V.depth(Bw), r = Math.max(s.ra, s.rb) * Math.max(1, kz);
       const a0 = V.proj(s.A), b0 = V.proj(s.B);
       const bx = b[0] - a[0], by = b[1] - a[1], L2 = bx*bx + by*by, L = Math.sqrt(L2);
       const b0x = b0[0] - a0[0], b0y = b0[1] - a0[1], L0 = Math.hypot(b0x, b0y);
@@ -658,7 +660,7 @@ function render(view, T, full = true) {
       for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
         const px = x + 0.5 - a[0], py = y + 0.5 - a[1];
         const h = L2 > 1e-6 ? Math.min(1, Math.max(0, (px*bx + py*by) / L2)) : 0;
-        const ox = px - h*bx, oy = py - h*by, rr = s.ra + (s.rb - s.ra) * h, d2 = ox*ox + oy*oy;
+        const ox = px - h*bx, oy = py - h*by, rr = (s.ra + (s.rb - s.ra) * h) * kz, d2 = ox*ox + oy*oy;
         if (d2 > rr*rr) continue;
         const dep = da + (db - da) * h + Math.sqrt(rr*rr - d2), i = y*W + x;
         if (dep <= z[i]) continue;
@@ -2147,7 +2149,7 @@ function buildPhotoBody() {
   for (let i = 0; i < SL; i++) {
     const t = (i + 0.5) / SL, p0 = mid(ax, bx, t), [l0, r0] = half(p0, [1, 0], 30), full = l0 + r0 + 1 <= shW * 1.05;
     const p = full ? [p0[0] + (l0 - r0) / 2, p0[1]] : p0, hw = Math.max(2, full ? (l0 + r0 + 1) / 2 : Math.min(l0, r0) + 0.5);
-    const bone = t < 0.62 ? 'chest' : 'pelvis', ry = Math.hypot(bx[0] - ax[0], bx[1] - ax[1]) / SL * 0.75;
+    const bone = t < 0.62 ? 'chest' : 'pelvis', ry = Math.hypot(bx[0] - ax[0], bx[1] - ax[1]) / SL * 1.05;   // 上下多重疊，彎腰時腰背才不會裂開
     const sr = i === 1 || i === 2 ? 'chest' : i === 3 || i === 4 ? 'belly' : i === 5 ? 'butt' : null;   // 軀幹切片：胸、肚子、臀
     ell(bone, J3(p), [hw, ry, hw * 0.62], mat(sampleCol([p[0] - hw * 0.5, p[1]], [p[0] + hw * 0.5, p[1]], 0, 1)), sr ? {soft: sr + i, softR: sr} : {});
   }
@@ -2158,7 +2160,7 @@ function buildPhotoBody() {
   { // 裙子：髖以下、兩腿之間仍是人物（被裙子蓋住）時，繼續往下切片，直到露出腿縫
     const hx = hip[0]; let y = hip[1] + 3;
     while (y < 130 && on(hx, y)) { const [l, r] = half([hx, y], [1, 0], 30), ww = (l + r + 1) / 2;
-      ell('pelvis', [hx + (l - r) / 2, y, 0], [ww, 2.4, ww * 0.62], mat(sampleCol([hx - ww * 0.5, y], [hx + ww * 0.5, y], 0, 1)), {skirt: true}); y += 3; }
+      ell('pelvis', [hx + (l - r) / 2, y, 0], [ww, 1.6, ww * 0.62], mat(sampleCol([hx - ww * 0.5, y], [hx + ww * 0.5, y], 0, 1)), {skirt: true}); y += 1.5; }   // 每 1.5 px 一片，背面才不會變成階梯
   }
   cap('head', J3(neck), J3(mid(neck, hip, 0.08)), 2, 2, mat(sampleCol(head, neck, 0.75, 1)));
   // 頭：頭髮外形 = 頭附近輪廓的範圍；臉 = 往前一點的膚色橢球（動漫臉：大眼、瀏海）
@@ -2196,7 +2198,8 @@ function refinePhotoBody() {
       if (PHB.MS) P.push({get: () => sh.r[2], set: v => { sh.r = [sh.r[0], sh.r[1], Math.max(1, v)]; }}, {get: () => sh.C[2], set: v => { sh.C = [sh.C[0], sh.C[1], v]; }}); }
     else P.push({get: () => sh.ra, set: v => { const k = Math.max(0.8, v) / sh.ra; sh.ra *= k; sh.rb *= k; }},
       {get: () => sh.A[0], set: v => { const d = v - sh.A[0]; sh.A = [sh.A[0] + d, sh.A[1], sh.A[2]]; sh.B = [sh.B[0] + d, sh.B[1], sh.B[2]]; }},
-      ...(PHB.MS ? [{get: () => sh.A[2], set: v => { const d = v - sh.A[2]; sh.A = [sh.A[0], sh.A[1], sh.A[2] + d]; sh.B = [sh.B[0], sh.B[1], sh.B[2] + d]; }}] : []));
+      ...(PHB.MS ? [{get: () => sh.A[2], set: v => { const d = v - sh.A[2]; sh.A = [sh.A[0], sh.A[1], sh.A[2] + d]; sh.B = [sh.B[0], sh.B[1], sh.B[2] + d]; }},
+        {get: () => (sh.kz ?? 1) * 10, set: v => { sh.kz = Math.min(1.5, Math.max(0.5, v / 10)); }}] : []));
   }
   let best = iou(); const before = best;
   for (const st of [1, 0.5]) for (let round = 0; round < 3; round++) {
@@ -2237,6 +2240,8 @@ function photoSideDepth(SD) {
       const m = /^[rl](Sh|El|Wr|Hip|Kn)$/.exec(JOINTS[sh.bone].k); if (!m) continue;
       const [a, b] = limb[m[1]], za = y => lineZ(a, b, y);
       sh.A = [sh.A[0], sh.A[1], za(sh.A[1])]; sh.B = [sh.B[0], sh.B[1], za(sh.B[1])];
+      // 側面粗細：在膠囊中段量側面輪廓的寬度，和正面半徑的比值當作橢圓截面比例（限 0.5～1.5）
+      if (m[1] !== 'Wr') { const ym = (sh.A[1] + sh.B[1]) / 2, run = runZ(ym, za(ym)); if (run) sh.kz = Math.min(1.5, Math.max(0.5, (run[1] - run[0] + 1) / 2 / ((sh.ra + sh.rb) / 2))); }
     }
   }
   // 臉放在頭的最前面
