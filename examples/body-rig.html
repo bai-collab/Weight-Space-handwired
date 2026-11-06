@@ -1819,10 +1819,15 @@ $('ph-fit').onclick = async () => {
   const P = Object.fromEntries(PH_J.map(([k], i) => [k, PH.pts[i]])), r = Math.max(2, Math.round(s * 2.5));
   const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], hip = mid(P.rHip, P.lHip), knee = mid(P.rKn, P.lKn);
   const sm = {
-    skin: phSample(P.head, P.neck, 0.35, r), hair: phSample(P.head, P.neck, -0.5, r),
+    skin: phSample(P.head, P.neck, 0.35, r), hair: null,
     top: phSample(P.neck, hip, 0.4, r), bottom: phSample(hip, knee, 0.12, r),
-    leg: phSample(P.rKn, P.rAn, 0.5, Math.max(1, r >> 1)), shoe: phSample(P.rKn, P.rAn, 1.08, Math.max(1, r >> 1)),
+    leg: phSample(P.rKn, P.rAn, 0.5, Math.max(1, r >> 1)), shoe: null,
   };
+  // 頭髮、鞋子的位置因圖而異：沿方向取幾個候選點，挑和膚色差最多的那個（瀏海、腳背常露出皮膚）
+  const pick = cands => { let best = null, bd = -1; const sk = sm.skin && toLab(sm.skin);
+    for (const c of cands) if (c) { const d = sk ? dE(toLab(c), sk) : 0; if (d > bd) { bd = d; best = c; } } return best; };
+  sm.hair = pick([-0.5, -0.8, -1.1, -1.4].map(f => phSample(P.head, P.neck, f, r)));
+  sm.shoe = pick([1.04, 1.1, 1.16, 1.22].flatMap(f => [phSample(P.rKn, P.rAn, f, Math.max(1, r >> 1)), phSample(P.lKn, P.lAn, f, Math.max(1, r >> 1))]));
   const map = BODY === 'anime' ? {skin: 'skin', hair: 'ahair', top: 'top', bottom: 'skirt', leg: 'sock', shoe: 'shoe'}
     : {skin: 'skin', hair: 'hair', top: 'shirt', bottom: 'pants', shoe: 'shoe'};
   for (const [k, m] of Object.entries(map)) if (sm[k]) MAT[m] = tones(sm[k]);
