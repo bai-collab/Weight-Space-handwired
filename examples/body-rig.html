@@ -2078,6 +2078,20 @@ $('ph-save').onclick = async () => {
 
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawAll);
 buildPanel(); drawAll(); requestAnimationFrame(physLoop);
+// 內建照片角色（選用）：若同一位置有 photo-preset.json（去背圖＋14 個關節），載入後直接建立「照片」體型並切換過去。
+// repo 裡沒有這個檔，就維持原本的寫實體型
+(async () => {
+  try {
+    const r = await fetch('photo-preset.json'); if (!r.ok) return; const j = await r.json();
+    const im = new Image(); im.src = j.img; await im.decode();
+    const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; c.getContext('2d').drawImage(im, 0, 0);
+    phSetImage(c);
+    const a = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    for (let i = 0; i < PH.mask.length; i++) PH.mask[i] = a[i * 4 + 3] >= 128 ? 1 : 0;
+    PH.pts = j.pts.map(p => [p[0], p[1]]); phApplyMask(); $('ph-body').click();
+    $('ph-fitstat').innerHTML = '已載入內建角色（' + (j.name || '照片角色') + '）。' + $('ph-fitstat').innerHTML;
+  } catch (e) { /* 沒有內建角色：照常使用 */ }
+})();
 ['p-g', 'p-d', 'p-k'].forEach(id => $(id).addEventListener('input', () => {}));
 $('t-phys').addEventListener('change', () => { PHYS.fresh = true; drawAll(); });
 </script>
