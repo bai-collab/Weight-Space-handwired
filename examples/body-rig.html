@@ -113,6 +113,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
       <label><input id="t-grid" type="checkbox">像素格線</label>
       <label><input id="t-selout" type="checkbox">選擇性描邊</label>
       <label><input id="t-phtex" type="checkbox" checked>照片貼圖</label>
+      <label><input id="t-soft" type="checkbox" checked>軟組織</label>
     </div>
     <div class="toggles" id="phys-bar" hidden>
       <label><input id="t-phys" type="checkbox" checked>衣物物理</label>
@@ -180,6 +181,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
         </div>
         <div class="stat" id="tl-stat">拖曲線上的兩個圓點調整這一段的速度：橫軸是時間、縱軸是進度。</div>
       </div>
+
+      <details class="fit" id="soft-sec">
+        <summary><h2>軟組織 <span>胸、肚子、臀、大腿、臉頰的彈簧阻尼</span></h2></summary>
+        <div class="bar"><span class="note">程度</span><input id="soft-g" type="range" min="0" max="300" value="100" style="flex:1"><output id="soft-gv" class="stat">1.0×（自然）</output></div>
+        <div id="soft-rows" style="display:grid;gap:4px"></div>
+        <p class="note">每個部位：d'' = −ω²d − 2ζωd' − 骨頭加速度，ω = 2π × 頻率；位移用 ReLU 限在上限內；往下晃時變高變窄、往上時變矮變寬（體積守恆）。頻率越高越緊實，阻尼越大越快停。預設值是「自然」，依人體軟組織每秒約 3～7 次的印象設定（未經即時檢索）。</p>
+      </details>
 
       <details class="fit" id="photo-sec">
         <summary><h2>照片 → sprite <span>上傳圖片、點關節，轉成像素角色</span></h2></summary>
@@ -365,7 +373,7 @@ function setJoints(P) { JOINTS.forEach(j => j.P = P[j.k]); REST.P = JOINTS.map(j
 function buildReal() {
   setJoints({pelvis: [40.5, yHp, 0], chest: [40.5, yHp - 2, 0], head: [40.5, yNeck + 2, 0.5], rSh: [24, ySh, 0], rEl: [21.5, yEl, 0], rWr: [19.5, yWr, 0.5], lSh: [57, ySh, 0], lEl: [59.5, yEl, 0], lWr: [61.5, yWr, 0.5], rHip: [34, yHp + 2, 0], rKn: [33.5, yKn, 1], rAn: [33.5, yAn, -1], lHip: [47, yHp + 2, 0], lKn: [47.5, yKn, 1], lAn: [47.5, yAn, -1]});
   for (const sd of ['r', 'l']) {
-    cap(sd + 'Hip', J(sd + 'Hip'), J(sd + 'Kn'), 6.4, 5, 'pants');
+    cap(sd + 'Hip', J(sd + 'Hip'), J(sd + 'Kn'), 6.4, 5, 'pants', {soft: 'thigh' + sd, softR: 'thigh', sA: 0.35, sB: 0.1});
     cap(sd + 'Kn', J(sd + 'Kn'), J(sd + 'An'), 4.8, 3.4, 'pants');
     const [ax] = J(sd + 'An');
     cap(sd + 'An', [ax, yAn + 1.6, -3.5], [ax, yAn + 2.4, 8.5], 3.1, 2.4, 'shoe', {foot: true});
@@ -374,12 +382,13 @@ function buildReal() {
     const w = J(sd + 'Wr');
     cap(sd + 'Wr', [w[0], w[1] + 1, w[2]], [w[0] + (sd === 'r' ? -0.5 : 0.5), w[1] + 9, w[2] + 1], 3, 2.4, 'skin');
   }
-  ell('pelvis', [40.5, yHp + 1, 0], [11.5, 7.5, 7.8], 'pants');
+  ell('pelvis', [40.5, yHp + 1, 0], [11.5, 7.5, 7.8], 'pants', {soft: 'butt', softR: 'butt'});
   ell('pelvis', [40.5, yHp - 3.5, 0], [12.2, 1.9, 8.6], 'belt');
   ell('chest', [40.5, (ySh + yHp) / 2 - 2, 0.5], [13.6, 19, 9], 'shirt');
   ell('chest', [40.5, ySh + 1.5, 0], [17.5, 4.6, 5.8], 'shirt');
   cap('head', [40.5, yNeck - 1, 0.5], [40.5, yNeck + 5, 0], 3.6, 3.8, 'skin');
   ell('head', [40.5, yNeck - 9, 1], [8.6, 10, 9], 'head', {face: true});
+  for (const sd of [-1, 1]) ell('head', [40.5 + sd * 4.8, yNeck - 6.2, 8.3], [2.2, 1.9, 1.6], 'skin', {soft: 'cheek' + sd, softR: 'cheek'});   // 臉頰
   ell('head', [40.5, yNeck - 8, 9.6], [1.4, 1.7, 1.6], 'skin');
 }
 // LPC 體型：依 LPC 男性基本角色（64×64 格、身高約 47 px、頭約佔 1/3）量出的比例，放大 2 倍、腳底對齊地面
@@ -433,7 +442,7 @@ function buildAnime() {
     lSh: [m(31.5), 38, 0], lEl: [m(30), 56, 0], lWr: [m(29), 72, 0.5], rHip: [36.5, 73, 0], rKn: [36, 104, 1], rAn: [36, 132, -0.5],
     lHip: [m(36.5), 73, 0], lKn: [m(36), 104, 1], lAn: [m(36), 132, -0.5]});
   for (const sd of ['r', 'l']) {
-    cap(sd + 'Hip', J(sd + 'Hip'), J(sd + 'Kn'), 4.4, 3.5, 'skin');
+    cap(sd + 'Hip', J(sd + 'Hip'), J(sd + 'Kn'), 4.4, 3.5, 'skin', {soft: 'thigh' + sd, softR: 'thigh', sA: 0.35, sB: 0.1});
     cap(sd + 'Kn', J(sd + 'Kn'), J(sd + 'An'), 3.4, 2.5, 'sock');
     const [ax] = J(sd + 'An');
     cap(sd + 'An', [ax, 134, -2.5], [ax, 134.6, 6], 2.6, 2.2, 'shoe', {foot: true});
@@ -442,13 +451,14 @@ function buildAnime() {
     const w = J(sd + 'Wr');
     cap(sd + 'Wr', [w[0], w[1] + 0.5, w[2]], [w[0], w[1] + 6, w[2] + 0.8], 2.1, 1.8, 'skin');
   }
-  ell('pelvis', [40.5, 72, 0], [8, 5, 5.8], 'skirt');
-  ell('chest', [40.5, 63, 0], [6.6, 5, 5], 'top');          // 細腰
-  ell('chest', [40.5, 49, 0.3], [9.2, 11.2, 5.6], 'top');   // 胸廓（比例中性）
+  ell('pelvis', [40.5, 72, 0], [8, 5, 5.8], 'skirt', {soft: 'butt', softR: 'butt'});
+  ell('chest', [40.5, 63, 0], [6.6, 5, 5], 'top', {soft: 'belly', softR: 'belly'});          // 細腰
+  ell('chest', [40.5, 49, 0.3], [9.2, 11.2, 5.6], 'top', {soft: 'chest', softR: 'chest'});   // 胸廓（比例中性）
   ell('chest', [40.5, 40.5, 0], [10.4, 4.4, 4.8], 'top');     // 肩線
   cap('head', [40.5, 30.5, 0], [40.5, 36, 0], 2.3, 2.5, 'skin');
   ell('head', [40.5, 21, -2.6], [9.6, 10.4, 7.6], 'ahair');   // 後腦的頭髮
   ell('head', [40.5, 20, 0.6], [9.2, 10.6, 9.2], 'head', {face: true, anime: true});
+  for (const sd of [-1, 1]) ell('head', [40.5 + sd * 5.2, 24.2, 7.6], [2.4, 2, 1.8], 'skin', {soft: 'cheek' + sd, softR: 'cheek'});   // 臉頰
   for (const x of [31.3, 49.7]) ell('head', [x, 13.5, -1.2], [2.2, 2.2, 2.2], 'ahair');   // 綁髮處
   physInit();
 }
@@ -530,20 +540,52 @@ function physPrep(T) {
     PHYS.fresh = false;
   }
 }
-function physLoop(ts) {
-  if (BODY === 'anime' && $('t-phys').checked) {
-    const dt = Math.min(1 / 30, (ts - (PHYS.last || ts)) / 1000 || 1 / 60);
-    const T = fk(state.pose, $('t-ground').checked);
-    physStep(T, dt / 2, physOpt()); physStep(T, dt / 2, physOpt());
-    draw('front', T); draw('side', T);
+// ---------- L6：軟組織（胸、肚子、臀、大腿、臉頰）：附在骨頭上的彈簧阻尼，由骨頭加速度驅動 ----------
+// d'' = −ω²·d − 2ζω·d' − g·a（ω = 2πf；a = 錨點的加速度，用前後三幀的二階差分），d = clampR(d, −dmax, dmax)
+// 預設值是「自然」：人體軟組織的自然頻率約每秒 3～7 次（⚠️ 依印象設定，未經即時檢索）
+const SOFT_P = {chest: {n: '胸部', f: 4, z: 0.25, dmax: 1.5}, belly: {n: '肚子', f: 3, z: 0.3, dmax: 1}, butt: {n: '臀部', f: 3.5, z: 0.3, dmax: 1},
+  thigh: {n: '大腿', f: 5, z: 0.35, dmax: 0.8}, cheek: {n: '臉頰', f: 7, z: 0.4, dmax: 0.4}};
+let SOFT = {}, softTick = 0;
+const softOf = s => s.soft && $('t-soft').checked ? SOFT[s.soft] : null;
+function softReset() { SOFT = {}; }
+function softStep(T, dt) {
+  const G = +$('soft-g').value / 100; softTick++;
+  for (const s of SHAPES) {
+    if (!s.soft) continue;
+    const st = SOFT[s.soft] ??= {d: [0, 0, 0], v: [0, 0, 0], p1: null, p2: null, t: -1};
+    if (st.t === softTick) continue; st.t = softTick;
+    const anchor = toWorld(T, s.bone, s.kind === 'ell' ? s.C : s.A);
+    if (!st.p1) { st.p1 = st.p2 = anchor; continue; }
+    let a = [0, 1, 2].map(k => (anchor[k] - 2 * st.p1[k] + st.p2[k]) / (dt * dt));
+    const am = Math.hypot(...a); if (am > 6000) a = a.map(v => v * 6000 / am);   // 姿勢瞬間跳動時限制衝擊
+    st.p2 = st.p1; st.p1 = anchor;
+    const P = SOFT_P[s.softR], w = 2 * Math.PI * P.f, dm = P.dmax * G, h = dt / 8;
+    for (let k = 0; k < 8; k++) for (let c = 0; c < 3; c++) {   // 半隱式歐拉，8 個子步
+      st.v[c] += (-w * w * st.d[c] - 2 * P.z * w * st.v[c] - G * a[c]) * h; st.d[c] += st.v[c] * h;
+      st.d[c] = clampR(st.d[c], -dm, dm);
+    }
   }
+}
+const softActive = () => Object.values(SOFT).some(st => Math.hypot(...st.d) > 0.01 || Math.hypot(...st.v) > 0.05);
+function physLoop(ts) {
+  const dt = Math.min(1 / 30, (ts - (PHYS.last || ts)) / 1000 || 1 / 60);
+  let need = false, T = null;
+  if (BODY === 'anime' && $('t-phys').checked) {
+    T = fk(state.pose, $('t-ground').checked);
+    physStep(T, dt / 2, physOpt()); physStep(T, dt / 2, physOpt()); need = true;
+  }
+  if ($('t-soft').checked && SHAPES.some(s => s.soft)) {
+    T ??= fk(state.pose, $('t-ground').checked); softStep(T, dt); need = need || softActive() || PHYS.softWas;
+    PHYS.softWas = softActive();
+  }
+  if (need) { draw('front', T); draw('side', T); }
   PHYS.last = ts; requestAnimationFrame(physLoop);
 }
 let BODY = 'real';
 function buildBody(kind) {
-  BODY = kind; SHAPES.length = 0;
+  BODY = kind; SHAPES.length = 0; softReset();
   ({lpc: buildLPC, anime: buildAnime, real: buildReal, photo: buildPhotoBody})[kind]();
-  SHAPES.forEach((s, i) => s.id = i);
+  SHAPES.forEach((s, i) => s.id = i); softReset();
 }
 buildBody('real');
 
@@ -561,7 +603,8 @@ function render(view, T, full = true) {
   const rest = full ? [] : null;
   for (const s of SHAPES) {
     if (s.kind === 'cap') {
-      const Aw = shapeW(T, s, s.A), Bw = shapeW(T, s, s.B);
+      let Aw = shapeW(T, s, s.A), Bw = shapeW(T, s, s.B);
+      const sf = softOf(s); if (sf) { Aw = add(Aw, sf.d.map(v => v * s.sA)); Bw = add(Bw, sf.d.map(v => v * s.sB)); }   // 軟組織：大腿只有靠髖的一端跟著晃
       const a = V.proj(Aw), b = V.proj(Bw), da = V.depth(Aw), db = V.depth(Bw), r = Math.max(s.ra, s.rb);
       const a0 = V.proj(s.A), b0 = V.proj(s.B);
       const bx = b[0] - a[0], by = b[1] - a[1], L2 = bx*bx + by*by, L = Math.sqrt(L2);
@@ -584,13 +627,16 @@ function render(view, T, full = true) {
         }
       }
     } else {
-      const C = toWorld(T, s.bone, s.C), R = T.R[s.bone], c2 = V.proj(C), dc = V.depth(C), r = Math.max(...s.r);
-      const Ld = mtv(R, V.dir).map((v, k) => v / s.r[k]);
+      const sf = softOf(s), C = sf ? add(toWorld(T, s.bone, s.C), sf.d) : toWorld(T, s.bone, s.C), R = T.R[s.bone];
+      // 體積守恆的伸縮：往下晃時變高變窄，往上時變矮變寬（k·(1/√k)² = 1）
+      const kq = sf ? Math.min(1.25, Math.max(0.8, 1 + 0.05 * sf.d[1])) : 1, SR = sf ? [s.r[0] / Math.sqrt(kq), s.r[1] * kq, s.r[2] / Math.sqrt(kq)] : s.r;
+      const c2 = V.proj(C), dc = V.depth(C), r = Math.max(...SR);
+      const Ld = mtv(R, V.dir).map((v, k) => v / SR[k]);
       const qa = Ld[0]*Ld[0] + Ld[1]*Ld[1] + Ld[2]*Ld[2];
       const x0 = Math.max(0, Math.floor(c2[0] - r)), x1 = Math.min(W - 1, Math.ceil(c2[0] + r));
       const y0 = Math.max(0, Math.floor(c2[1] - r)), y1 = Math.min(H - 1, Math.ceil(c2[1] + r));
       for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-        const P0 = V.P0(x + 0.5, y + 0.5), L0 = mtv(R, sub(P0, C)).map((v, k) => v / s.r[k]);
+        const P0 = V.P0(x + 0.5, y + 0.5), L0 = mtv(R, sub(P0, C)).map((v, k) => v / SR[k]);
         const qb = 2 * (L0[0]*Ld[0] + L0[1]*Ld[1] + L0[2]*Ld[2]), qc = L0[0]*L0[0] + L0[1]*L0[1] + L0[2]*L0[2] - 1;
         const disc = qb*qb - 4*qa*qc;
         if (disc < 0) continue;
@@ -600,7 +646,7 @@ function render(view, T, full = true) {
         z[i] = dep; sid[i] = s.id;
         if (full) {
           const u = mtv(R, sub(Hw, C));                         // 靜止姿勢下的局部偏移
-          const n = mv(R, u.map((v, k) => v / (s.r[k] * s.r[k])));
+          const n = mv(R, u.map((v, k) => v / (SR[k] * SR[k])));
           tt[i] = V.sx(n) / Math.hypot(...n);
           const restP = add(s.C, u), rp = V.proj(restP);
           rx[i] = rp[0]; ry[i] = rp[1]; fx[i] = restP[0];
@@ -1554,8 +1600,10 @@ $('tl-export').onclick = async () => {
   const n = TL.n, fps = +$('tl-fps').value || 10, sheet = document.createElement('canvas'); sheet.width = W * n; sheet.height = H * 2;
   const sc = sheet.getContext('2d'); state.exporting = true; const keepZ = state.rootZ; state.rootZ = 0;
   if (BODY === 'anime') PHYS.fresh = true;
+  softReset();
   for (let f = 0; f < n; f++) {
     state.pose = tlPose(f); const T = fk(state.pose, $('t-ground').checked);
+    if ($('t-soft').checked) softStep(T, 1 / fps);   // 軟組織也照每秒格數逐格推進
     if (BODY === 'anime') { if (PHYS.fresh) physPrep(T); else for (let k = 0; k < 4; k++) physStep(T, 1 / fps / 4, physOpt()); }
     draw('front', T); sc.drawImage(off, f * W, 0);
     draw('side', T); sc.drawImage(off, f * W, H);
@@ -1565,7 +1613,8 @@ $('tl-export').onclick = async () => {
     const q = []; for (let r = 0; r < 2; r++) for (let f = 0; f < n; f++) { const c = sc.getImageData(f * W, r * H, W, H); q.push(qaRGBA(c.data, W, H)); } return q; };
   const before = cellQA(), lockK = +$('tl-lock-k').value || 0;
   if ($('tl-lockcol').checked && lockK) {
-    const pts = []; for (let i = 0; i < d.length; i += 4) if (d[i + 3]) pts.push(toLab([d[i], d[i + 1], d[i + 2]]));
+    // 每種顏色只算一次（不依面積加權），小面積的膚色、嘴唇才不會被大片的黑衣服淹沒
+    const seen = new Set(), pts = []; for (let i = 0; i < d.length; i += 4) if (d[i + 3]) { const k = (d[i] >> 2) << 12 | (d[i + 1] >> 2) << 6 | (d[i + 2] >> 2); if (!seen.has(k)) { seen.add(k); pts.push(toLab([d[i], d[i + 1], d[i + 2]])); } }
     const palLab = kmeansLab(pts, lockK), pal = palLab.map(fromLab), Q = quantLayer(palLab);
     for (let r = 0; r < 2; r++) for (let f = 0; f < n; f++) {   // 每一格：量化到共用調色盤 → 去孤立像素 → 寫回
       const c = sc.getImageData(f * W, r * H, W, H), cd = c.data, idx = new Int16Array(W * H).fill(-1);
@@ -1602,6 +1651,15 @@ function tlStride() {
 }
 
 tlRender();
+// 軟組織控制台
+$('soft-rows').innerHTML = Object.entries(SOFT_P).map(([k, P]) => `<div class="joint" style="grid-template-columns:3.4em repeat(3,minmax(0,1fr));gap:6px">
+  <span>${P.n}</span>
+  <label class="note">頻率 <input data-k="${k}" data-p="f" type="range" min="1" max="12" step="0.5" value="${P.f}"> <output>${P.f}</output></label>
+  <label class="note">阻尼 <input data-k="${k}" data-p="z" type="range" min="0.05" max="1" step="0.05" value="${P.z}"> <output>${P.z}</output></label>
+  <label class="note">上限 <input data-k="${k}" data-p="dmax" type="range" min="0" max="4" step="0.1" value="${P.dmax}"> <output>${P.dmax}</output></label></div>`).join('');
+$('soft-rows').querySelectorAll('input').forEach(i => i.oninput = () => { SOFT_P[i.dataset.k][i.dataset.p] = +i.value; i.nextElementSibling.textContent = i.value; });
+$('soft-g').oninput = () => { const g = +$('soft-g').value / 100; $('soft-gv').textContent = `${g.toFixed(1)}×${g === 1 ? '（自然）' : ''}`; };
+$('t-soft').addEventListener('change', () => { softReset(); drawAll(); });
 Object.entries(MAT).forEach(([k, v]) => MAT0[k] = v.map(c => [...c]));
 
 // ---------- 照片 → sprite ----------
@@ -1977,7 +2035,7 @@ function buildPhotoBody() {
     for (const [a, b] of [['Sh', 'El'], ['El', 'Wr'], ['Hip', 'Kn'], ['Kn', 'An']]) {
       const A = at(sd + a), B = at(sd + b), r = radius(A, B), o = segOff(A, B); info[sd + a] = r;
       const A2 = [A[0] + o[0], A[1] + o[1]], B2 = [B[0] + o[0], B[1] + o[1]];   // 膠囊平移到量到的中心
-      cap(sd + a, J3(A2), J3(B2), r, r * 0.92, mat(sampleCol(A2, B2)));
+      cap(sd + a, J3(A2), J3(B2), r, r * 0.92, mat(sampleCol(A2, B2)), a === 'Hip' ? {soft: 'thigh' + sd, softR: 'thigh', sA: 0.35, sB: 0.1} : {});
     }
     // 手：沿前臂方向延伸到輪廓盡頭
     const E = at(sd + 'El'), Wr = at(sd + 'Wr'), d = [Wr[0] - E[0], Wr[1] - E[1]], L = Math.hypot(...d) || 1, u = [d[0] / L, d[1] / L];
@@ -1996,7 +2054,8 @@ function buildPhotoBody() {
     const t = (i + 0.5) / SL, p0 = mid(ax, bx, t), [l0, r0] = half(p0, [1, 0], 30), full = l0 + r0 + 1 <= shW * 1.05;
     const p = full ? [p0[0] + (l0 - r0) / 2, p0[1]] : p0, hw = Math.max(2, full ? (l0 + r0 + 1) / 2 : Math.min(l0, r0) + 0.5);
     const bone = t < 0.62 ? 'chest' : 'pelvis', ry = Math.hypot(bx[0] - ax[0], bx[1] - ax[1]) / SL * 0.75;
-    ell(bone, J3(p), [hw, ry, hw * 0.62], mat(sampleCol([p[0] - hw * 0.5, p[1]], [p[0] + hw * 0.5, p[1]], 0, 1)));
+    const sr = i === 1 || i === 2 ? 'chest' : i === 3 || i === 4 ? 'belly' : i === 5 ? 'butt' : null;   // 軀幹切片：胸、肚子、臀
+    ell(bone, J3(p), [hw, ry, hw * 0.62], mat(sampleCol([p[0] - hw * 0.5, p[1]], [p[0] + hw * 0.5, p[1]], 0, 1)), sr ? {soft: sr + i, softR: sr} : {});
   }
   { // 髖到大腿根的銜接
     const p = mid(at('rHip'), at('lHip')), [l, r] = half(p, [1, 0], 25);
@@ -2016,6 +2075,7 @@ function buildPhotoBody() {
   const fr = Math.max(2, Math.min(hw * 0.78, Math.hypot(neck[0] - head[0], neck[1] - head[1]) * 0.95));
   MAT.ahair = tones(hairC.map(Math.round));
   ell('head', [head[0], head[1], hw * 0.45], [fr, fr * 1.2, fr], 'head', {face: true, anime: true});
+  for (const sd of [-1, 1]) ell('head', [head[0] + sd * fr * 0.55, head[1] + fr * 0.4, hw * 0.45 + fr * 0.78], [fr * 0.32, fr * 0.26, fr * 0.22], MAT.skin ? 'skin' : 'skin', {soft: 'cheek' + sd, softR: 'cheek', cheek: true});   // 臉頰（貼圖會取到照片的臉頰）
   MAT.skin = tones(sampleCol(head, neck, 0.3, 0.6).map(Math.round));
   PHB = {M, C};
   SHAPES.forEach((sh, i) => sh.id = i);
