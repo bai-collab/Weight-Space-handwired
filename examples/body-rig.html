@@ -100,6 +100,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
       <button aria-pressed="true" data-body="real">寫實</button>
       <button aria-pressed="false" data-body="lpc">LPC</button>
       <button aria-pressed="false" data-body="anime">動漫</button>
+      <button aria-pressed="false" data-body="photo" disabled title="先在「照片 → sprite」建立">照片</button>
     </div>
     <div class="seg" role="group" aria-label="顯示模式">
       <button aria-pressed="true" data-mode="color">原色</button>
@@ -211,6 +212,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
         <div class="bar">
           <button class="primary" id="ph-fit" disabled>B：反推姿勢＋取色，套到目前體型</button>
           <button class="chip" id="ph-reset" disabled>還原原本配色</button>
+          <button class="primary" id="ph-body" disabled>從照片建立體型</button>
         </div>
         <div class="stat" id="ph-fitstat"></div>
         <div class="bar" id="ph-swatch"></div>
@@ -539,7 +541,7 @@ function physLoop(ts) {
 let BODY = 'real';
 function buildBody(kind) {
   BODY = kind; SHAPES.length = 0;
-  ({lpc: buildLPC, anime: buildAnime, real: buildReal})[kind]();
+  ({lpc: buildLPC, anime: buildAnime, real: buildReal, photo: buildPhotoBody})[kind]();
   SHAPES.forEach((s, i) => s.id = i);
 }
 buildBody('real');
@@ -1726,7 +1728,7 @@ function phDraw() {
   const n = PH.pts.length;
   $('ph-tip').textContent = PH.mode !== 'pts' ? {wand: '魔術棒：點一下背景，把相連、顏色相近的區域挖掉。', keep: '保留筆刷：在要留下的地方拖曳。', erase: '刪除筆刷：在要挖掉的地方拖曳。'}[PH.mode]
     : n < PH_J.length ? `請點第 ${n + 1}／${PH_J.length} 個：${PH_J[n][1]}` : '14 個點都點好了。可以拖動修正，然後按 B（也可以用骨架引導去背）。';
-  $('ph-fit').disabled = n < PH_J.length; $('ph-undo').disabled = $('ph-clear').disabled = !n;
+  $('ph-fit').disabled = $('ph-body').disabled = n < PH_J.length; $('ph-undo').disabled = $('ph-clear').disabled = !n;
 }
 const phPos = e => { const r = $('ph-cv').getBoundingClientRect(), k = $('ph-cv').width / r.width; return [(e.clientX - r.left) * k, (e.clientY - r.top) * k]; };
 PH.mode = 'pts';
@@ -1924,6 +1926,135 @@ function phPixelize() {
   $('ph-save').disabled = false;
   return {w, h, K: pal.length, fg: fgIdx.length};
 }
+// ---------- 照片體型：骨架用使用者點的關節，粗細從去背輪廓量，顏色沿骨頭取樣 ----------
+// 照片座標 → sprite 座標：人物最高點到最低點縮成 128 px、腳底貼地（y = 137）、髖部中點放在 x = 40.5
+let PHB = null;
+function phToSprite() {
+  const w = PH.src.width, h = PH.src.height; let top = h, bot = 0;
+  for (let i = 0; i < w * h; i++) if (PH.mask[i]) { const y = (i / w) | 0; if (y < top) top = y; if (y > bot) bot = y; }
+  const at = k => PH.pts[PH_J.findIndex(j => j[0] === k)], cx = (at('rHip')[0] + at('lHip')[0]) / 2, s = 128 / Math.max(1, bot - top);
+  const tf = ([x, y]) => [(x - cx) * s + 40.5, (y - bot) * s + 137];
+  // 目標：遮罩和顏色縮到 81×144（預乘 alpha 的平均；覆蓋率 ≥ 0.5 才算人物）
+  const sd = PH.img.getContext('2d').getImageData(0, 0, w, h).data, M = new Uint8Array(W * H), C = new Float32Array(W * H * 3), acc = new Float32Array(W * H * 5);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const [sx, sy] = tf([x + 0.5, y + 0.5]), gx = Math.floor(sx), gy = Math.floor(sy); if (gx < 0 || gy < 0 || gx >= W || gy >= H) continue;
+    const i = (y * w + x) * 4, a = sd[i + 3] / 255, g = gy * W + gx;
+    acc[g * 5] += sd[i] * a; acc[g * 5 + 1] += sd[i + 1] * a; acc[g * 5 + 2] += sd[i + 2] * a; acc[g * 5 + 3] += a; acc[g * 5 + 4]++;
+  }
+  for (let g = 0; g < W * H; g++) { const a = acc[g * 5 + 3], n = acc[g * 5 + 4]; if (n && a / n >= 0.5) { M[g] = 1; C.set([acc[g * 5] / a, acc[g * 5 + 1] / a, acc[g * 5 + 2] / a], g * 3); } }
+  return {tf, M, C, at: k => tf(at(k))};
+}
+function buildPhotoBody() {
+  const {M, C, at} = phToSprite(), on = (x, y) => { x = Math.round(x - 0.5); y = Math.round(y - 0.5); return x >= 0 && y >= 0 && x < W && y < H && M[y * W + x]; };
+  const col = (x, y) => { const g = Math.round(y - 0.5) * W + Math.round(x - 0.5); return [C[g * 3], C[g * 3 + 1], C[g * 3 + 2]]; };
+  // 半寬：從點 p 沿單位向量 n 往兩側走到輪廓外；取較短的一側（另一側常貼著軀幹）
+  const half = (p, n, cap = 20) => { const side = sg => { let d = 0; while (d < cap && on(p[0] + n[0] * sg * (d + 1), p[1] + n[1] * sg * (d + 1))) d++; return d; }; return [side(1), side(-1)]; };
+  const mid = (a, b, t = 0.5) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+  const nrm = (a, b) => { const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy) || 1; return [-dy / L, dx / L]; };
+  // 肢體半徑：量「包含這一點的整段寬度」/ 2；寬度異常大（貼到軀幹）時才改用較短一側 × 2
+  // 貼到軀幹時：往身體外側量（外側一定量得到），內側假設只多 1 px
+  const outSide = (p, n, l, r) => ((p[0] - 40.5) * n[0] >= 0 ? l : r);
+  const runW = (p, n, lim) => { const [l, r] = half(p, n, 25), wd = l + r + 1; return wd <= lim ? wd : outSide(p, n, l, r) + 2; };
+  // 中心偏移：整段寬度合理時，回傳「量到的中心 − 這一點」
+  const centerOff = (p, n, lim) => { const [l, r] = half(p, n, 25); if (l + r + 1 <= lim) return [n[0] * (l - r) / 2, n[1] * (l - r) / 2];
+    const o = outSide(p, n, l, r), sg = (p[0] - 40.5) * n[0] >= 0 ? 1 : -1; return [n[0] * sg * (o - 1) / 2, n[1] * sg * (o - 1) / 2]; };
+  const segOff = (a, b) => { const n = nrm(a, b), L = Math.hypot(b[0] - a[0], b[1] - a[1]), o = [0.25, 0.5, 0.75].map(t => centerOff(mid(a, b, t), n, Math.max(6, L * 0.6)));
+    return [o.reduce((x, v) => x + v[0], 0) / 3, o.reduce((x, v) => x + v[1], 0) / 3]; };
+  const radius = (a, b) => { const n = nrm(a, b), L = Math.hypot(b[0] - a[0], b[1] - a[1]), r = [0.3, 0.5, 0.7].map(t => runW(mid(a, b, t), n, Math.max(6, L * 0.6)) / 2);
+    return Math.max(1.2, r.reduce((x, y) => x + y, 0) / 3); };
+  const sampleCol = (a, b, t0 = 0.25, t1 = 0.75) => { const L = []; for (let t = t0; t <= t1 + 1e-9; t += (t1 - t0) / 6) { const p = mid(a, b, t); if (on(...p)) L.push(toLab(col(...p))); }
+    return L.length ? fromLab([0, 1, 2].map(c => median(L.map(v => v[c])))) : [128, 128, 128]; };
+  const J3 = (p, z = 0) => [p[0], p[1], z];
+  const hip = mid(at('rHip'), at('lHip')), neck = at('neck'), head = at('head');
+  setJoints({pelvis: J3([hip[0], hip[1] - 2]), chest: J3([hip[0], hip[1] - 4]), head: J3(neck),
+    rSh: J3(at('rSh')), rEl: J3(at('rEl')), rWr: J3(at('rWr')), lSh: J3(at('lSh')), lEl: J3(at('lEl')), lWr: J3(at('lWr')),
+    rHip: J3(at('rHip')), rKn: J3(at('rKn')), rAn: J3(at('rAn')), lHip: J3(at('lHip')), lKn: J3(at('lKn')), lAn: J3(at('lAn'))});
+  let k = 0; const mat = c => { const key = 'ph' + (k++); MAT[key] = tones(c.map(Math.round)); return key; };
+  const info = {};
+  for (const sd of ['r', 'l']) {
+    for (const [a, b] of [['Sh', 'El'], ['El', 'Wr'], ['Hip', 'Kn'], ['Kn', 'An']]) {
+      const A = at(sd + a), B = at(sd + b), r = radius(A, B), o = segOff(A, B); info[sd + a] = r;
+      const A2 = [A[0] + o[0], A[1] + o[1]], B2 = [B[0] + o[0], B[1] + o[1]];   // 膠囊平移到量到的中心
+      cap(sd + a, J3(A2), J3(B2), r, r * 0.92, mat(sampleCol(A2, B2)));
+    }
+    // 手：沿前臂方向延伸到輪廓盡頭
+    const E = at(sd + 'El'), Wr = at(sd + 'Wr'), d = [Wr[0] - E[0], Wr[1] - E[1]], L = Math.hypot(...d) || 1, u = [d[0] / L, d[1] / L];
+    let ext = 0; while (ext < 12 && on(Wr[0] + u[0] * (ext + 1), Wr[1] + u[1] * (ext + 1))) ext++;
+    const hand = [Wr[0] + u[0] * ext, Wr[1] + u[1] * ext];
+    cap(sd + 'Wr', J3(Wr), J3(hand), Math.max(1.2, info[sd + 'El'] * 0.9), Math.max(1, info[sd + 'El'] * 0.7), mat(sampleCol(Wr, hand, 0.2, 0.8)));
+    // 腳：從腳踝往下到地面，往前伸成鞋
+    const An = at(sd + 'An'); let down = 0; while (down < 14 && on(An[0], An[1] + down + 1)) down++;
+    const fr = Math.max(1.4, Math.min(3, down / 2));
+    cap(sd + 'An', [An[0], An[1] + down - fr, -1.5], [An[0], An[1] + down - fr, 5], fr, fr * 0.85, mat(sampleCol(An, [An[0], An[1] + down], 0.3, 0.9)), {foot: true});
+  }
+  // 軀幹：從脖子到髖，切 6 片橢球；每片的半寬取該列左右較短的一側（手臂常貼在旁邊）
+  const ax = neck, bx = hip, SL = 6;
+  const shW = Math.hypot(at('lSh')[0] - at('rSh')[0], at('lSh')[1] - at('rSh')[1]);
+  for (let i = 0; i < SL; i++) {
+    const t = (i + 0.5) / SL, p0 = mid(ax, bx, t), [l0, r0] = half(p0, [1, 0], 30), full = l0 + r0 + 1 <= shW * 1.05;
+    const p = full ? [p0[0] + (l0 - r0) / 2, p0[1]] : p0, hw = Math.max(2, full ? (l0 + r0 + 1) / 2 : Math.min(l0, r0) + 0.5);
+    const bone = t < 0.62 ? 'chest' : 'pelvis', ry = Math.hypot(bx[0] - ax[0], bx[1] - ax[1]) / SL * 0.75;
+    ell(bone, J3(p), [hw, ry, hw * 0.62], mat(sampleCol([p[0] - hw * 0.5, p[1]], [p[0] + hw * 0.5, p[1]], 0, 1)));
+  }
+  { // 髖到大腿根的銜接
+    const p = mid(at('rHip'), at('lHip')), [l, r] = half(p, [1, 0], 25);
+    ell('pelvis', J3(p), [Math.max(2, Math.min(l, r)), 4, Math.max(2, Math.min(l, r)) * 0.62], mat(sampleCol(at('rHip'), at('lHip'), 0.3, 0.7)));
+  }
+  cap('head', J3(neck), J3(mid(neck, hip, 0.08)), 2, 2, mat(sampleCol(head, neck, 0.75, 1)));
+  // 頭：頭髮外形 = 頭附近輪廓的範圍；臉 = 往前一點的膚色橢球（動漫臉：大眼、瀏海）
+  let topY = head[1]; while (topY > 0 && on(head[0], topY - 1)) topY--;
+  const [hl, hr] = half(head, [1, 0], 18), hw = Math.max(3, (hl + hr) / 2), hcx = head[0] + (hl - hr) / 2, hairBot = neck[1] + 1;
+  const hairC = sampleCol([hcx, topY], head, 0.05, 0.35), hm = mat(hairC);
+  // 頭髮：從頭頂到脖子分 3 層，每層依輪廓寬度各畫一顆橢球（鮑伯頭兩側垂到肩膀）
+  for (let i = 0; i < 3; i++) {
+    const y = topY + (hairBot - topY) * (i + 0.5) / 3, [l, r] = half([head[0], y], [1, 0], 20), ww = Math.max(2, (l + r + 1) / 2), cxh = head[0] + (l - r) / 2;
+    ell('head', [cxh, y, -1], [ww, (hairBot - topY) / 3 * 0.8, Math.max(ww, hw) * 0.8], hm);
+  }
+  const fr = Math.max(2, Math.min(hw * 0.78, Math.hypot(neck[0] - head[0], neck[1] - head[1]) * 0.95));
+  MAT.ahair = tones(hairC.map(Math.round));
+  ell('head', [head[0], head[1], hw * 0.45], [fr, fr * 1.2, fr], 'head', {face: true, anime: true});
+  MAT.skin = tones(sampleCol(head, neck, 0.3, 0.6).map(Math.round));
+  PHB = {M, C};
+  SHAPES.forEach((sh, i) => sh.id = i);
+  refinePhotoBody();
+}
+// 微調：量完的初值再用坐標下降，直接讓正面輪廓 IoU 最大。
+// 每個形狀兩個參數：寬度（橢球 x 半徑／膠囊半徑）與左右位置；步長 1 → 0.5 px，確定性
+function refinePhotoBody() {
+  const T = fk({}, false), iou = () => { const R = render('front', T, false); let I = 0, U = 0;
+    for (let i = 0; i < W * H; i++) { const a = R.sid[i] >= 0, t = PHB.M[i]; if (a && t) I++; if (a || t) U++; } return I / (U || 1); };
+  const P = [];
+  for (const sh of SHAPES) {
+    if (sh.face) continue;
+    if (sh.kind === 'ell') P.push({get: () => sh.r[0], set: v => { sh.r = [Math.max(1, v), sh.r[1], sh.r[2]]; }}, {get: () => sh.C[0], set: v => { sh.C = [v, sh.C[1], sh.C[2]]; }});
+    else P.push({get: () => sh.ra, set: v => { const k = Math.max(0.8, v) / sh.ra; sh.ra *= k; sh.rb *= k; }},
+      {get: () => sh.A[0], set: v => { const d = v - sh.A[0]; sh.A = [sh.A[0] + d, sh.A[1], sh.A[2]]; sh.B = [sh.B[0] + d, sh.B[1], sh.B[2]]; }});
+  }
+  let best = iou(); const before = best;
+  for (const st of [1, 0.5]) for (let round = 0; round < 3; round++) {
+    let imp = false;
+    for (const q of P) for (const d of [st, -st]) { const o = q.get(); q.set(o + d); const v = iou(); if (v > best + 1e-9) { best = v; imp = true; } else q.set(o); }
+    if (!imp) break;
+  }
+  PHB.refine = {before, after: best};
+}
+// 相似度：sprite 正面輪廓 vs 照片遮罩的 IoU；顏色：兩邊都有的像素平均 OKLab 色差
+function photoSimilarity() {
+  const T = fk(state.pose, $('t-ground').checked), R = render('front', T); let I = 0, U = 0, dsum = 0;
+  for (let i = 0; i < W * H; i++) { const a = R.sid[i] >= 0, t = PHB.M[i]; if (a && t) I++; if (a || t) U++; }
+  draw('front', T); const d = octx.getImageData(0, 0, W, H).data;
+  for (let i = 0; i < W * H; i++) if (R.sid[i] >= 0 && PHB.M[i]) dsum += dE(toLab([d[i * 4], d[i * 4 + 1], d[i * 4 + 2]]), toLab([PHB.C[i * 3], PHB.C[i * 3 + 1], PHB.C[i * 3 + 2]]));
+  return {iou: I / (U || 1), dE: dsum / (I || 1)};
+}
+$('ph-body').onclick = () => {
+  document.querySelector('[data-body=photo]').disabled = false;
+  if (PH.pts.length < PH_J.length) { $('ph-fitstat').textContent = '先點完 14 個關節。'; return; }
+  stopAnim(); stopPlay(); tlStop(); $('t-ground').checked = true;
+  setBody('photo'); state.pose = {}; syncSliders(); drawAll();
+  const sim = photoSimilarity(); PH.sim = sim;
+  $('ph-fitstat').innerHTML = `已建立照片體型：輪廓相似度（IoU）<b>${(sim.iou * 100).toFixed(1)}%</b>（量測初值 ${(PHB.refine.before * 100).toFixed(1)}%，微調後提升）、重疊處平均色差 <b>${sim.dE.toFixed(3)}</b>（OKLab）。這個體型的「站姿」就是照片的姿勢，所有動作都從這裡開始彎。`;
+};
+
 $('ph-pix').onclick = () => { if (PH.img) phPixelize(); };
 $('ph-save').onclick = async () => {
   if (!PH.out) return; const blob = await new Promise(r => PH.out.toBlob(r, 'image/png')), name = `pixel-${PH.out.width}x${PH.out.height}.png`;
