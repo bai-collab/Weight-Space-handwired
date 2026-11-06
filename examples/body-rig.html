@@ -112,6 +112,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
       <label><input id="t-ground" type="checkbox" checked>地面約束</label>
       <label><input id="t-grid" type="checkbox">像素格線</label>
       <label><input id="t-selout" type="checkbox">選擇性描邊</label>
+      <label><input id="t-phtex" type="checkbox" checked>照片貼圖</label>
     </div>
     <div class="toggles" id="phys-bar" hidden>
       <label><input id="t-phys" type="checkbox" checked>衣物物理</label>
@@ -556,7 +557,7 @@ const VIEW = {
 function render(view, T, full = true) {
   const V = VIEW[view], N = W * H;
   const z = new Float32Array(N).fill(-1e9), sid = new Int16Array(N).fill(-1);
-  const tt = full ? new Float32Array(N) : null, rx = full ? new Float32Array(N) : null, ry = full ? new Float32Array(N) : null;
+  const tt = full ? new Float32Array(N) : null, rx = full ? new Float32Array(N) : null, ry = full ? new Float32Array(N) : null, fx = full ? new Float32Array(N) : null;   // fx：靜止姿勢下的正面 x（照片貼圖用）
   const rest = full ? [] : null;
   for (const s of SHAPES) {
     if (s.kind === 'cap') {
@@ -579,7 +580,7 @@ function render(view, T, full = true) {
           const side = L > 1e-3 ? (ox * -by + oy * bx) / L : ox;   // 帶號橫向距離
           tt[i] = side / rr;
           const nx = L0 > 1e-3 ? -b0y / L0 : 1, ny = L0 > 1e-3 ? b0x / L0 : 0;
-          rx[i] = a0[0] + h * b0x + nx * side; ry[i] = a0[1] + h * b0y + ny * side;
+          rx[i] = a0[0] + h * b0x + nx * side; ry[i] = a0[1] + h * b0y + ny * side; fx[i] = view === 'front' ? rx[i] : s.A[0] + h * (s.B[0] - s.A[0]);
         }
       }
     } else {
@@ -602,13 +603,13 @@ function render(view, T, full = true) {
           const n = mv(R, u.map((v, k) => v / (s.r[k] * s.r[k])));
           tt[i] = V.sx(n) / Math.hypot(...n);
           const restP = add(s.C, u), rp = V.proj(restP);
-          rx[i] = rp[0]; ry[i] = rp[1];
+          rx[i] = rp[0]; ry[i] = rp[1]; fx[i] = restP[0];
           rest[i] = u;
         }
       }
     }
   }
-  return {z, sid, tt, rx, ry, rest};
+  return {z, sid, tt, rx, ry, fx, rest};
 }
 
 // ---------- 上色 ----------
@@ -681,7 +682,8 @@ function draw(view, T) {
       }
       if (state.mode === 'heat') c = heat(Math.hypot(x + 0.5 - r.rx[i], y + 0.5 - r.ry[i]) / 40);
       else if (state.mode === 'bone') c = BONECOL[s.bone];
-      else c = color(s, r.tt[i], r.rest[i]);
+      // 照片貼圖：側面看到的「後半邊」（橢球局部 z < 0）照片上看不到，改用該形狀的材質色
+      else c = BODY === 'photo' && PHB && $('t-phtex').checked && !(view === 'side' && r.rest[i] && r.rest[i][2] < 0) ? photoTex(r.fx[i], r.ry[i]) || color(s, r.tt[i], r.rest[i]) : color(s, r.tt[i], r.rest[i]);
       if (view === 'side' && (g === '右臂' || g === '右腿')) c = c.map(v => v * 0.72);   // 遠側較暗
       if (edge) c = state.mode === 'color' ? ($('t-selout').checked ? selout(c.map(Math.round)) : OUTLINE) : c.map(v => v * 0.55);   // 選擇性描邊：同色相變暗
     }
@@ -739,7 +741,7 @@ document.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click'
   document.querySelectorAll('[data-mode]').forEach(x => x.setAttribute('aria-pressed', x === b));
   $('legend').hidden = state.mode !== 'heat'; drawAll();
 }));
-['t-bones', 't-ground', 't-grid', 't-selout'].forEach(id => $(id).addEventListener('change', drawAll));
+['t-bones', 't-ground', 't-grid', 't-selout', 't-phtex'].forEach(id => $(id).addEventListener('change', drawAll));
 
 // ---------- L0–L2：Matsuoka 節律 → 傳導延遲 → 彈簧阻尼 + ReLU 限位 ----------
 const cpg = {x1: 0.1, x2: 0, v1: 0, v2: 0}, hist = [];
@@ -2005,10 +2007,11 @@ function buildPhotoBody() {
   let topY = head[1]; while (topY > 0 && on(head[0], topY - 1)) topY--;
   const [hl, hr] = half(head, [1, 0], 18), hw = Math.max(3, (hl + hr) / 2), hcx = head[0] + (hl - hr) / 2, hairBot = neck[1] + 1;
   const hairC = sampleCol([hcx, topY], head, 0.05, 0.35), hm = mat(hairC);
-  // 頭髮：從頭頂到脖子分 3 層，每層依輪廓寬度各畫一顆橢球（鮑伯頭兩側垂到肩膀）
-  for (let i = 0; i < 3; i++) {
-    const y = topY + (hairBot - topY) * (i + 0.5) / 3, [l, r] = half([head[0], y], [1, 0], 20), ww = Math.max(2, (l + r + 1) / 2), cxh = head[0] + (l - r) / 2;
-    ell('head', [cxh, y, -1], [ww, (hairBot - topY) / 3 * 0.8, Math.max(ww, hw) * 0.8], hm);
+  // 頭髮：從頭頂到脖子分層，每層依輪廓寬度各畫一顆橢球（鮑伯頭兩側垂到肩膀）
+  const HL = 8;   // 頭髮分 8 層，每層依輪廓寬度各畫一顆
+  for (let i = 0; i < HL; i++) {
+    const y = topY + (hairBot - topY) * (i + 0.5) / HL, [l, r] = half([head[0], y], [1, 0], 20), ww = Math.max(2, (l + r + 1) / 2), cxh = head[0] + (l - r) / 2;
+    ell('head', [cxh, y, -1], [ww, (hairBot - topY) / HL * 0.9, Math.max(ww, hw) * 0.8], hm);
   }
   const fr = Math.max(2, Math.min(hw * 0.78, Math.hypot(neck[0] - head[0], neck[1] - head[1]) * 0.95));
   MAT.ahair = tones(hairC.map(Math.round));
@@ -2037,6 +2040,16 @@ function refinePhotoBody() {
     if (!imp) break;
   }
   PHB.refine = {before, after: best};
+}
+// 照片貼圖：每個像素回到「靜止姿勢下的正面位置」（就是照片上的位置）取色；
+// 落在輪廓外時找 3×3 內最近的人物像素；都沒有就交給材質色。純查表，沒有訓練
+function photoTex(x, y) {
+  const gx = Math.floor(x), gy = Math.floor(y);
+  for (const [dx, dy] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+    const xx = gx + dx, yy = gy + dy; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+    const g = yy * W + xx; if (PHB.M[g]) return [PHB.C[g * 3], PHB.C[g * 3 + 1], PHB.C[g * 3 + 2]];
+  }
+  return null;
 }
 // 相似度：sprite 正面輪廓 vs 照片遮罩的 IoU；顏色：兩邊都有的像素平均 OKLab 色差
 function photoSimilarity() {
