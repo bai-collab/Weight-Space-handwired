@@ -115,6 +115,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
       <label><input id="t-phtex" type="checkbox" checked>照片貼圖</label>
       <label><input id="t-soft" type="checkbox" checked>軟組織</label>
       <label><input id="t-spine" type="checkbox" checked>顯示脊椎</label>
+      <label title="拖骨盆滑桿時，髖關節自動反向補償，腳底不滑"><input id="t-stand" type="checkbox" checked>站立模式</label>
     </div>
     <div class="toggles" id="phys-bar" hidden>
       <label><input id="t-phys" type="checkbox" checked>衣物物理</label>
@@ -830,8 +831,18 @@ function buildPanel() {
   }).join('') + '</div>').join('');
   $('presets').querySelectorAll('button').forEach(b => b.onclick = () => { stopAnim(); state.pose = {...PRESETS[b.dataset.preset]}; syncSliders(); drawAll(); });
   $('joints').querySelectorAll('input').forEach(inp => inp.oninput = () => {
-    stopAnim(); state.pose[inp.dataset.id] = +inp.value; $('o-' + inp.dataset.id).textContent = inp.value + '°'; drawAll();
+    stopAnim(); const id = inp.dataset.id, old = state.pose[id] ?? 0; state.pose[id] = +inp.value;
+    standComp(id, +inp.value - old);
+    $('o-' + id).textContent = inp.value + '°'; syncSliders(); drawAll();
   });
+}
+// 站立模式：拖骨盆時，髖關節自動反向補償同樣的角度，腿維持原本的方向、腳底不滑。
+// 前傾 Δ → 兩髖前抬 +Δ；側傾 Δ → 右髖外展 −Δ、左髖外展 +Δ（兩側外展的正負號相反）。超出髖的活動範圍時只能補到極限
+function standComp(id, d) {
+  if (!d || !$('t-stand').checked) return;
+  const addTo = (k, v) => { state.pose[k] = clampR((state.pose[k] ?? 0) + v, ...DOF[k].lim); };
+  if (id === 'pelvis.f') { addTo('rHip.f', d); addTo('lHip.f', d); }
+  if (id === 'pelvis.a') { addTo('rHip.a', -d); addTo('lHip.a', d); }
 }
 function syncSliders() {
   DOFS.forEach(d => { const v = state.pose[d.id] ?? 0; $('j-' + d.id).value = v; $('o-' + d.id).textContent = Math.round(v) + '°'; });
