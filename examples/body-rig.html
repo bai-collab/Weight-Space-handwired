@@ -200,6 +200,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
           <button class="chip" id="ph-clear" disabled>重新點</button>
           <span class="note">圖片只在你的瀏覽器裡處理，不會上傳。</span>
         </div>
+        <div class="bar">
+          <span class="note">編輯</span>
+          <div class="seg" id="ph-view" role="group" aria-label="正面或側面圖"><button aria-pressed="true" data-v="front">正面圖</button><button aria-pressed="false" data-v="side">側面圖（選用）</button></div>
+          <span class="note">內建角色</span><div class="seg" id="ph-chars" role="group" aria-label="內建角色"></div>
+        </div>
         <div class="stat" id="ph-tip">先選一張全身、正面站立的圖片。</div>
         <div class="bar">
           <div class="seg" id="ph-mode" role="group" aria-label="在圖上點擊的作用">
@@ -773,7 +778,8 @@ function draw(view, T) {
       if (state.mode === 'heat') c = heat(Math.hypot(x + 0.5 - r.rx[i], y + 0.5 - r.ry[i]) / 40);
       else if (state.mode === 'bone') c = BONECOL[s.bone];
       // 照片貼圖：側面看到的「後半邊」（橢球局部 z < 0）照片上看不到，改用該形狀的材質色
-      else c = BODY === 'photo' && PHB && $('t-phtex').checked && !(view === 'side' && r.rest[i] && r.rest[i][2] < 0) ? photoTex(r.fx[i], r.ry[i]) || color(s, r.tt[i], r.rest[i]) : color(s, r.tt[i], r.rest[i]);
+      else c = BODY === 'photo' && PHB && $('t-phtex').checked && view === 'side' && PHB.MS ? photoTexS(r.rx[i], r.ry[i]) || color(s, r.tt[i], r.rest[i])
+        : BODY === 'photo' && PHB && $('t-phtex').checked && !(view === 'side' && r.rest[i] && r.rest[i][2] < 0) ? photoTex(r.fx[i], r.ry[i]) || color(s, r.tt[i], r.rest[i]) : color(s, r.tt[i], r.rest[i]);
       if (view === 'side' && (g === '右臂' || g === '右腿')) c = c.map(v => v * 0.72);   // 遠側較暗
       if (edge) c = state.mode === 'color' ? ($('t-selout').checked ? selout(c.map(Math.round)) : OUTLINE) : c.map(v => v * 0.55);   // 選擇性描邊：同色相變暗
     }
@@ -1734,10 +1740,24 @@ $('t-soft').addEventListener('change', () => { softReset(); drawAll(); });
 Object.entries(MAT).forEach(([k, v]) => MAT0[k] = v.map(c => [...c]));
 
 // ---------- 照片 → sprite ----------
-const PH = {img: null, pts: [], drag: -1, out: null};
 const PH_J = [['head', '臉的中心'], ['neck', '脖子（下巴下方）'], ['rSh', '角色的右肩（圖的左側）'], ['rEl', '右手肘'], ['rWr', '右手腕'],
   ['lSh', '角色的左肩（圖的右側）'], ['lEl', '左手肘'], ['lWr', '左手腕'], ['rHip', '右髖'], ['rKn', '右膝'], ['rAn', '右腳踝'],
   ['lHip', '左髖'], ['lKn', '左膝'], ['lAn', '左腳踝']];
+// 側面圖：人物臉朝右的側面，點 8 個關節（看得到的那一側）
+const PH_JS = [['head', '臉的中心'], ['neck', '脖子'], ['sh', '肩'], ['el', '手肘'], ['wr', '手腕'], ['hip', '髖'], ['kn', '膝'], ['an', '腳踝']];
+const midP = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+const PHF = {img: null, pts: [], drag: -1, out: null, J: PH_J, view: 'front',
+  L: [['head', 'neck'], ['neck', 'rSh'], ['rSh', 'rEl'], ['rEl', 'rWr'], ['neck', 'lSh'], ['lSh', 'lEl'], ['lEl', 'lWr'], ['rHip', 'rKn'], ['rKn', 'rAn'], ['lHip', 'lKn'], ['lKn', 'lAn'], ['rHip', 'lHip']],
+  hipOf: at => midP(at('rHip'), at('lHip'))};
+const PHS = {img: null, pts: [], drag: -1, out: null, J: PH_JS, view: 'side',
+  L: [['head', 'neck'], ['neck', 'sh'], ['sh', 'el'], ['el', 'wr'], ['neck', 'hip'], ['hip', 'kn'], ['kn', 'an']], hipOf: at => at('hip')};
+let PH = PHF;   // 目前在編輯的那張圖（正面或側面）；工具都作用在 PH 上
+function phSelectView(v) {
+  PH = v === 'side' ? PHS : PHF;
+  document.querySelectorAll('#ph-view button').forEach(b => b.setAttribute('aria-pressed', b.dataset.v === v));
+  if (PH.src) { $('ph-cv').hidden = false; $('ph-cv').width = PH.src.width; $('ph-cv').height = PH.src.height; phApplyMask(); }
+  else { $('ph-cv').hidden = true; $('ph-tip').textContent = v === 'side' ? '選一張臉朝右的側面全身圖（選用；有了它，側面的厚度和材質就不用猜）。' : '先選一張全身、正面站立的圖片。'; }
+}
 function phLoad(file) {
   const im = new Image();
   im.onload = () => {
@@ -1794,11 +1814,11 @@ function cutWand(x, y) {
 // ③ 骨架引導：骨頭當「人物」種子、邊框當「背景」種子，兩邊同時往外擴散；
 //    每個像素歸給「路徑上最大色差最小」的那一邊（minimax 路徑，等同分水嶺），交界就是輪廓
 function cutSkeleton() {
-  if (PH.pts.length < PH_J.length) { $('ph-cutstat').textContent = '先點完 14 個關節，才能用骨架引導。'; return; }
+  if (PH.pts.length < PH.J.length) { $('ph-cutstat').textContent = `先點完 ${PH.J.length} 個關節，才能用骨架引導。`; return; }
   phLab(); phPush(); const w = PH.src.width, h = PH.src.height, N = w * h, lab = new Int8Array(N), cost = new Float32Array(N).fill(Infinity);
-  const at = k => PH.pts[PH_J.findIndex(j => j[0] === k)], mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-  const hip = mid(at('rHip'), at('lHip')), S = [];
-  const bones = [['head', 'neck'], ['neck', 'rSh'], ['rSh', 'rEl'], ['rEl', 'rWr'], ['neck', 'lSh'], ['lSh', 'lEl'], ['lEl', 'lWr'], ['rHip', 'rKn'], ['rKn', 'rAn'], ['lHip', 'lKn'], ['lKn', 'lAn'], ['rHip', 'lHip']];
+  const at = k => PH.pts[PH.J.findIndex(j => j[0] === k)];
+  const hip = PH.hipOf(at), S = [];
+  const bones = PH.L;
   const seg = (p, q) => { const n = Math.ceil(Math.hypot(q[0] - p[0], q[1] - p[1])); for (let k = 0; k <= n; k++) { const x = Math.round(p[0] + (q[0] - p[0]) * k / n), y = Math.round(p[1] + (q[1] - p[1]) * k / n); if (x >= 0 && y >= 0 && x < w && y < h) S.push([y * w + x, 1]); } };
   bones.forEach(([a, b]) => seg(at(a), at(b))); seg(at('neck'), hip);
   for (let x = 0; x < w; x++) S.push([x, -1], [(h - 1) * w + x, -1]); for (let y = 0; y < h; y++) S.push([y * w, -1], [y * w + w - 1, -1]);
@@ -1850,16 +1870,16 @@ function phDraw() {
   if ($('ph-ghost').checked) { ctx.globalAlpha = 0.25; ctx.drawImage(PH.src, 0, 0); ctx.globalAlpha = 1; }
   ctx.drawImage(PH.img, 0, 0);
   ctx.lineWidth = 2 * k; ctx.strokeStyle = 'rgba(240,135,92,.9)';
-  const at = key => PH.pts[PH_J.findIndex(j => j[0] === key)];
-  for (const [a, b] of [['head', 'neck'], ['neck', 'rSh'], ['rSh', 'rEl'], ['rEl', 'rWr'], ['neck', 'lSh'], ['lSh', 'lEl'], ['lEl', 'lWr'], ['rHip', 'rKn'], ['rKn', 'rAn'], ['lHip', 'lKn'], ['lKn', 'lAn'], ['rHip', 'lHip']]) {
+  const at = key => PH.pts[PH.J.findIndex(j => j[0] === key)];
+  for (const [a, b] of PH.L) {
     const p = at(a), q = at(b); if (p && q) { ctx.beginPath(); ctx.moveTo(...p); ctx.lineTo(...q); ctx.stroke(); }
   }
   PH.pts.forEach((p, i) => { ctx.fillStyle = i === PH.drag ? '#fff' : '#d9653b'; ctx.beginPath(); ctx.arc(p[0], p[1], 4 * k, 0, 7); ctx.fill();
     ctx.fillStyle = '#fff'; ctx.font = `${9 * k}px sans-serif`; ctx.fillText(i + 1, p[0] + 5 * k, p[1] - 5 * k); });
   const n = PH.pts.length;
   $('ph-tip').textContent = PH.mode !== 'pts' ? {wand: '魔術棒：點一下背景，把相連、顏色相近的區域挖掉。', keep: '保留筆刷：在要留下的地方拖曳。', erase: '刪除筆刷：在要挖掉的地方拖曳。'}[PH.mode]
-    : n < PH_J.length ? `請點第 ${n + 1}／${PH_J.length} 個：${PH_J[n][1]}` : '14 個點都點好了。可以拖動修正，然後按 B（也可以用骨架引導去背）。';
-  $('ph-fit').disabled = $('ph-body').disabled = n < PH_J.length; $('ph-undo').disabled = $('ph-clear').disabled = !n;
+    : n < PH.J.length ? `請點第 ${n + 1}／${PH.J.length} 個（${PH.view === 'side' ? '側面圖' : '正面圖'}）：${PH.J[n][1]}` : `${PH.J.length} 個點都點好了。可以拖動修正${PH.view === 'side' ? '，再按「從照片建立體型」就會一起用上側面圖' : '，然後按 B（也可以用骨架引導去背）'}。`;
+  $('ph-fit').disabled = $('ph-body').disabled = PHF.pts.length < PH_J.length; $('ph-undo').disabled = $('ph-clear').disabled = !n;
 }
 const phPos = e => { const r = $('ph-cv').getBoundingClientRect(), k = $('ph-cv').width / r.width; return [(e.clientX - r.left) * k, (e.clientY - r.top) * k]; };
 PH.mode = 'pts';
@@ -1871,7 +1891,7 @@ $('ph-cv').addEventListener('pointerdown', e => {
   if (PH.mode === 'keep' || PH.mode === 'erase') { phPush(); PH.painting = true; $('ph-cv').setPointerCapture(e.pointerId); cutBrush(...q, PH.mode === 'keep' ? 1 : 0); return phApplyMask(); }
   const i = PH.pts.findIndex(p => Math.hypot(p[0] - q[0], p[1] - q[1]) < 10 * k);
   if (i >= 0) { PH.drag = i; $('ph-cv').setPointerCapture(e.pointerId); }
-  else if (PH.pts.length < PH_J.length) PH.pts.push(q);
+  else if (PH.pts.length < PH.J.length) PH.pts.push(q);
   phDraw();
 });
 $('ph-cv').addEventListener('pointermove', e => {
@@ -1946,6 +1966,9 @@ function phSample(p, q, f, r) {   // 線段 p→q 上比例 f 的位置，取半
 }
 const tones = c => [c.map(v => Math.min(255, Math.round(v * 1.15 + 12))), c, c.map(v => Math.round(v * 0.72))];   // 亮、中、暗：固定倍率
 $('ph-fit').onclick = async () => {
+  const keepPH = PH; PH = PHF; try { await phFitB(); } finally { PH = keepPH; }
+};
+async function phFitB() {
   stopAnim(); stopPlay(); tlStop(); $('ph-fit').disabled = true; $('ph-fitstat').textContent = '反推中…';
   const pose = await phFitPose(), {e, s} = phResidual(pose);
   state.pose = pose; syncSliders();
@@ -1970,7 +1993,7 @@ $('ph-fit').onclick = async () => {
   PH.err = {mean, max: Math.max(...e)};
   $('ph-fitstat').innerHTML = `完成：關節投影誤差平均 <b>${mean.toFixed(1)} px</b>、最大 ${Math.max(...e).toFixed(1)} px（${PH_J[worst][1]}；以 sprite 像素計）。只有正面一個視角，手腳往前或往後無法分辨，已偏向自然姿勢。`;
   $('ph-fit').disabled = false; $('ph-reset').disabled = false; drawAll();
-};
+}
 $('ph-reset').onclick = () => { Object.entries(MAT0).forEach(([k, v]) => MAT[k] = v.map(c => [...c])); $('ph-swatch').innerHTML = ''; drawAll(); };
 
 // A：handwired 像素化管線
@@ -2060,13 +2083,13 @@ function phPixelize() {
 // ---------- 照片體型：骨架用使用者點的關節，粗細從去背輪廓量，顏色沿骨頭取樣 ----------
 // 照片座標 → sprite 座標：人物最高點到最低點縮成 128 px、腳底貼地（y = 137）、髖部中點放在 x = 40.5
 let PHB = null;
-function phToSprite() {
-  const w = PH.src.width, h = PH.src.height; let top = h, bot = 0;
-  for (let i = 0; i < w * h; i++) if (PH.mask[i]) { const y = (i / w) | 0; if (y < top) top = y; if (y > bot) bot = y; }
-  const at = k => PH.pts[PH_J.findIndex(j => j[0] === k)], cx = (at('rHip')[0] + at('lHip')[0]) / 2, s = 128 / Math.max(1, bot - top);
-  const tf = ([x, y]) => [(x - cx) * s + 40.5, (y - bot) * s + 137];
+function phToSprite(Q = PHF) {   // Q：正面圖（髖放在 x = 40.5）或側面圖（髖放在 z = 0，也就是側面畫面的 x = 40）
+  const w = Q.src.width, h = Q.src.height; let top = h, bot = 0;
+  for (let i = 0; i < w * h; i++) if (Q.mask[i]) { const y = (i / w) | 0; if (y < top) top = y; if (y > bot) bot = y; }
+  const at = k => Q.pts[Q.J.findIndex(j => j[0] === k)], cx = Q.hipOf(at)[0], s = 128 / Math.max(1, bot - top), x0 = Q.view === 'side' ? 40 : 40.5;
+  const tf = ([x, y]) => [(x - cx) * s + x0, (y - bot) * s + 137];
   // 目標：遮罩和顏色縮到 81×144（預乘 alpha 的平均；覆蓋率 ≥ 0.5 才算人物）
-  const sd = PH.img.getContext('2d').getImageData(0, 0, w, h).data, M = new Uint8Array(W * H), C = new Float32Array(W * H * 3), acc = new Float32Array(W * H * 5);
+  const sd = Q.img.getContext('2d').getImageData(0, 0, w, h).data, M = new Uint8Array(W * H), C = new Float32Array(W * H * 3), acc = new Float32Array(W * H * 5);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const [sx, sy] = tf([x + 0.5, y + 0.5]), gx = Math.floor(sx), gy = Math.floor(sy); if (gx < 0 || gy < 0 || gx >= W || gy >= H) continue;
     const i = (y * w + x) * 4, a = sd[i + 3] / 255, g = gy * W + gx;
@@ -2132,6 +2155,11 @@ function buildPhotoBody() {
     const p = mid(at('rHip'), at('lHip')), [l, r] = half(p, [1, 0], 25);
     ell('pelvis', J3(p), [Math.max(2, Math.min(l, r)), 4, Math.max(2, Math.min(l, r)) * 0.62], mat(sampleCol(at('rHip'), at('lHip'), 0.3, 0.7)));
   }
+  { // 裙子：髖以下、兩腿之間仍是人物（被裙子蓋住）時，繼續往下切片，直到露出腿縫
+    const hx = hip[0]; let y = hip[1] + 3;
+    while (y < 130 && on(hx, y)) { const [l, r] = half([hx, y], [1, 0], 30), ww = (l + r + 1) / 2;
+      ell('pelvis', [hx + (l - r) / 2, y, 0], [ww, 2.4, ww * 0.62], mat(sampleCol([hx - ww * 0.5, y], [hx + ww * 0.5, y], 0, 1)), {skirt: true}); y += 3; }
+  }
   cap('head', J3(neck), J3(mid(neck, hip, 0.08)), 2, 2, mat(sampleCol(head, neck, 0.75, 1)));
   // 頭：頭髮外形 = 頭附近輪廓的範圍；臉 = 往前一點的膚色橢球（動漫臉：大眼、瀏海）
   let topY = head[1]; while (topY > 0 && on(head[0], topY - 1)) topY--;
@@ -2149,20 +2177,26 @@ function buildPhotoBody() {
   for (const sd of [-1, 1]) ell('head', [head[0] + sd * fr * 0.55, head[1] + fr * 0.4, hw * 0.45 + fr * 0.78], [fr * 0.32, fr * 0.26, fr * 0.22], MAT.skin ? 'skin' : 'skin', {soft: 'cheek' + sd, softR: 'cheek', cheek: true});   // 臉頰（貼圖會取到照片的臉頰）
   MAT.skin = tones(sampleCol(head, neck, 0.3, 0.6).map(Math.round));
   PHB = {M, C};
+  const SD = PHS.src && PHS.pts.length === PH_JS.length ? phToSprite(PHS) : null;
+  if (SD) { photoSideDepth(SD); PHB.MS = SD.M; PHB.CS = SD.C; }
   SHAPES.forEach((sh, i) => sh.id = i);
   refinePhotoBody();
 }
 // 微調：量完的初值再用坐標下降，直接讓正面輪廓 IoU 最大。
 // 每個形狀兩個參數：寬度（橢球 x 半徑／膠囊半徑）與左右位置；步長 1 → 0.5 px，確定性
 function refinePhotoBody() {
-  const T = fk({}, false), iou = () => { const R = render('front', T, false); let I = 0, U = 0;
-    for (let i = 0; i < W * H; i++) { const a = R.sid[i] >= 0, t = PHB.M[i]; if (a && t) I++; if (a || t) U++; } return I / (U || 1); };
+  // 有側面圖時，目標是正面、側面 IoU 的平均，並多調前後位置與厚度
+  const T = fk({}, false), one = (v, M) => { const R = render(v, T, false); let I = 0, U = 0;
+    for (let i = 0; i < W * H; i++) { const a = R.sid[i] >= 0, t = M[i]; if (a && t) I++; if (a || t) U++; } return I / (U || 1); };
+  const iou = () => PHB.MS ? (one('front', PHB.M) + one('side', PHB.MS)) / 2 : one('front', PHB.M);
   const P = [];
   for (const sh of SHAPES) {
     if (sh.face) continue;
-    if (sh.kind === 'ell') P.push({get: () => sh.r[0], set: v => { sh.r = [Math.max(1, v), sh.r[1], sh.r[2]]; }}, {get: () => sh.C[0], set: v => { sh.C = [v, sh.C[1], sh.C[2]]; }});
+    if (sh.kind === 'ell') { P.push({get: () => sh.r[0], set: v => { sh.r = [Math.max(1, v), sh.r[1], sh.r[2]]; }}, {get: () => sh.C[0], set: v => { sh.C = [v, sh.C[1], sh.C[2]]; }});
+      if (PHB.MS) P.push({get: () => sh.r[2], set: v => { sh.r = [sh.r[0], sh.r[1], Math.max(1, v)]; }}, {get: () => sh.C[2], set: v => { sh.C = [sh.C[0], sh.C[1], v]; }}); }
     else P.push({get: () => sh.ra, set: v => { const k = Math.max(0.8, v) / sh.ra; sh.ra *= k; sh.rb *= k; }},
-      {get: () => sh.A[0], set: v => { const d = v - sh.A[0]; sh.A = [sh.A[0] + d, sh.A[1], sh.A[2]]; sh.B = [sh.B[0] + d, sh.B[1], sh.B[2]]; }});
+      {get: () => sh.A[0], set: v => { const d = v - sh.A[0]; sh.A = [sh.A[0] + d, sh.A[1], sh.A[2]]; sh.B = [sh.B[0] + d, sh.B[1], sh.B[2]]; }},
+      ...(PHB.MS ? [{get: () => sh.A[2], set: v => { const d = v - sh.A[2]; sh.A = [sh.A[0], sh.A[1], sh.A[2] + d]; sh.B = [sh.B[0], sh.B[1], sh.B[2] + d]; }}] : []));
   }
   let best = iou(); const before = best;
   for (const st of [1, 0.5]) for (let round = 0; round < 3; round++) {
@@ -2171,6 +2205,51 @@ function refinePhotoBody() {
     if (!imp) break;
   }
   PHB.refine = {before, after: best};
+}
+// ---------- 多視角：用側面圖量厚度（z）與前後位置，側面也有自己的貼圖 ----------
+function photoSideDepth(SD) {
+  const MS = SD.M, aS = SD.at, zs = k => aS(k)[0] - 40;
+  const cl01 = t => Math.min(1, Math.max(0, t));
+  const lineZ = (a, b, y) => { const A = aS(a), B = aS(b), t = cl01((y - A[1]) / ((B[1] - A[1]) || 1)); return A[0] + (B[0] - A[0]) * t - 40; };
+  // 該列裡、離預估位置最近的一段人物像素 → [前緣, 後緣] 的 z 範圍
+  const runZ = (y, zg) => { const gy = Math.round(y - 0.5); if (gy < 0 || gy >= H) return null; const gx = Math.round(40 + zg - 0.5); let c = -1;
+    for (let d = 0; d <= 8 && c < 0; d++) for (const q of [gx + d, gx - d]) if (q >= 0 && q < W && MS[gy * W + q]) { c = q; break; }
+    if (c < 0) return null; let l = c, r = c; while (l > 0 && MS[gy * W + l - 1]) l--; while (r < W - 1 && MS[gy * W + r + 1]) r++; return [l + 0.5 - 40, r + 0.5 - 40]; };
+  // 關節的前後位置
+  const jz = {pelvis: zs('hip'), rHip: zs('hip'), lHip: zs('hip'), rKn: zs('kn'), lKn: zs('kn'), rAn: zs('an'), lAn: zs('an'),
+    rSh: zs('sh'), lSh: zs('sh'), rEl: zs('el'), lEl: zs('el'), rWr: zs('wr'), lWr: zs('wr'), head: zs('neck')};
+  const hy = J('pelvis')[1], ny = J('head')[1];
+  JOINTS.forEach(j => { if (jz[j.k] != null) j.P = [j.P[0], j.P[1], jz[j.k]];
+    else if (SPINE.includes(j.k)) j.P = [j.P[0], j.P[1], zs('hip') + (zs('neck') - zs('hip')) * cl01((hy - j.P[1]) / ((hy - ny) || 1))]; });
+  REST.P = JOINTS.map(j => j.P);
+  const hipY = aS('hip')[1];
+  const limb = {Sh: ['sh', 'el'], El: ['el', 'wr'], Wr: ['wr', 'wr'], Hip: ['hip', 'kn'], Kn: ['kn', 'an']};
+  for (const sh of SHAPES) {
+    if (sh.kind === 'ell') {
+      if (sh.face || sh.cheek) continue;
+      const y = sh.C[1], zg = sh.bone === IDX.head ? lineZ('head', 'neck', y) : y > hipY ? lineZ('hip', 'kn', y) : lineZ('neck', 'hip', y);
+      const run = runZ(y, zg); if (!run) continue;
+      sh.C = [sh.C[0], sh.C[1], (run[0] + run[1]) / 2]; sh.r = [sh.r[0], sh.r[1], Math.max(1, (run[1] - run[0] + 1) / 2)];
+    } else if (sh.foot) {   // 鞋：腳底那一列從後跟到腳尖
+      const y = Math.min(H - 1, (sh.A[1] + sh.B[1]) / 2 + sh.ra * 0.5), run = runZ(y, zs('an'));
+      if (run) { sh.A = [sh.A[0], sh.A[1], run[0] + sh.ra]; sh.B = [sh.B[0], sh.B[1], Math.max(run[0] + sh.ra, run[1] - sh.rb)]; }
+    } else {
+      const m = /^[rl](Sh|El|Wr|Hip|Kn)$/.exec(JOINTS[sh.bone].k); if (!m) continue;
+      const [a, b] = limb[m[1]], za = y => lineZ(a, b, y);
+      sh.A = [sh.A[0], sh.A[1], za(sh.A[1])]; sh.B = [sh.B[0], sh.B[1], za(sh.B[1])];
+    }
+  }
+  // 臉放在頭的最前面
+  const face = SHAPES.find(s => s.face), hr = face && runZ(face.C[1], lineZ('head', 'neck', face.C[1]));
+  if (face && hr) { const zf = hr[1] - face.r[2] * 0.75; face.C = [face.C[0], face.C[1], zf]; SHAPES.filter(s => s.cheek).forEach(c => c.C = [c.C[0], c.C[1], hr[1] - c.r[2]]); }
+}
+function photoTexS(x, y) {   // 側面貼圖：側面畫面座標（40 + z, y）直接回側面照片取色
+  if (!PHB.MS) return null; const gx = Math.floor(x), gy = Math.floor(y);
+  for (const [dx, dy] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+    const xx = gx + dx, yy = gy + dy; if (xx < 0 || yy < 0 || xx >= W || yy >= H) continue;
+    const g = yy * W + xx; if (PHB.MS[g]) return [PHB.CS[g * 3], PHB.CS[g * 3 + 1], PHB.CS[g * 3 + 2]];
+  }
+  return null;
 }
 // 照片貼圖：每個像素回到「靜止姿勢下的正面位置」（就是照片上的位置）取色；
 // 落在輪廓外時找 3×3 內最近的人物像素；都沒有就交給材質色。純查表，沒有訓練
@@ -2188,15 +2267,19 @@ function photoSimilarity() {
   for (let i = 0; i < W * H; i++) { const a = R.sid[i] >= 0, t = PHB.M[i]; if (a && t) I++; if (a || t) U++; }
   draw('front', T); const d = octx.getImageData(0, 0, W, H).data;
   for (let i = 0; i < W * H; i++) if (R.sid[i] >= 0 && PHB.M[i]) dsum += dE(toLab([d[i * 4], d[i * 4 + 1], d[i * 4 + 2]]), toLab([PHB.C[i * 3], PHB.C[i * 3 + 1], PHB.C[i * 3 + 2]]));
-  return {iou: I / (U || 1), dE: dsum / (I || 1)};
+  const out = {iou: I / (U || 1), dE: dsum / (I || 1)};
+  if (PHB.MS) { const RS = render('side', T); let I2 = 0, U2 = 0, d2 = 0; draw('side', T); const ds = octx.getImageData(0, 0, W, H).data;
+    for (let i = 0; i < W * H; i++) { const a = RS.sid[i] >= 0, t = PHB.MS[i]; if (a && t) { I2++; d2 += dE(toLab([ds[i * 4], ds[i * 4 + 1], ds[i * 4 + 2]]), toLab([PHB.CS[i * 3], PHB.CS[i * 3 + 1], PHB.CS[i * 3 + 2]])); } if (a || t) U2++; }
+    out.iouS = I2 / (U2 || 1); out.dES = d2 / (I2 || 1); }
+  return out;
 }
 $('ph-body').onclick = () => {
   document.querySelector('[data-body=photo]').disabled = false;
-  if (PH.pts.length < PH_J.length) { $('ph-fitstat').textContent = '先點完 14 個關節。'; return; }
+  if (PHF.pts.length < PH_J.length) { $('ph-fitstat').textContent = '先在正面圖點完 14 個關節。'; return; }
   stopAnim(); stopPlay(); tlStop(); $('t-ground').checked = true;
   setBody('photo'); state.pose = {}; syncSliders(); drawAll();
   const sim = photoSimilarity(); PH.sim = sim;
-  $('ph-fitstat').innerHTML = `已建立照片體型：輪廓相似度（IoU）<b>${(sim.iou * 100).toFixed(1)}%</b>（量測初值 ${(PHB.refine.before * 100).toFixed(1)}%，微調後提升）、重疊處平均色差 <b>${sim.dE.toFixed(3)}</b>（OKLab）。這個體型的「站姿」就是照片的姿勢，所有動作都從這裡開始彎。`;
+  $('ph-fitstat').innerHTML = `已建立照片體型：${sim.iouS != null ? `側面相似度 <b>${(sim.iouS * 100).toFixed(1)}%</b>（色差 ${sim.dES.toFixed(3)}）、` : '（沒有側面圖，側面是推測的）'}正面輪廓相似度（IoU）<b>${(sim.iou * 100).toFixed(1)}%</b>（量測初值 ${(PHB.refine.before * 100).toFixed(1)}%，微調後提升）、重疊處平均色差 <b>${sim.dE.toFixed(3)}</b>（OKLab）。這個體型的「站姿」就是照片的姿勢，所有動作都從這裡開始彎。`;
 };
 
 $('ph-pix').onclick = () => { if (PH.img) phPixelize(); };
@@ -2211,18 +2294,33 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', drawAll);
 buildPanel(); drawAll(); requestAnimationFrame(physLoop);
 // 內建照片角色（選用）：若同一位置有 photo-preset.json（去背圖＋14 個關節），載入後直接建立「照片」體型並切換過去。
 // repo 裡沒有這個檔，就維持原本的寫實體型
+async function phLoadInto(Q, d) {   // d = {img, pts}：去背後的圖＋關節點
+  const im = new Image(); im.src = d.img; await im.decode();
+  const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; c.getContext('2d').drawImage(im, 0, 0);
+  PH = Q; phSetImage(c); const a = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+  for (let i = 0; i < Q.mask.length; i++) Q.mask[i] = a[i * 4 + 3] >= 128 ? 1 : 0;
+  Q.pts = d.pts.map(p => [p[0], p[1]]); phApplyMask();
+}
+let PH_CHARS = [];
+async function phUseChar(i) {
+  const ch = PH_CHARS[i]; if (!ch) return;
+  document.querySelectorAll('#ph-chars button').forEach((b, k) => b.setAttribute('aria-pressed', k === i));
+  Object.assign(PHS, {src: null, img: null, pts: [], mask: null});
+  if (ch.side) await phLoadInto(PHS, ch.side);
+  await phLoadInto(PHF, ch.front); phSelectView('front'); $('ph-body').click();
+  $('ph-fitstat').innerHTML = `已載入內建角色「${ch.name}」。` + $('ph-fitstat').innerHTML;
+}
+// 內建照片角色（選用）：同一位置若有 photo-preset.json，就載入第一位並切到「照片」體型；repo 裡沒有這個檔，就維持寫實體型
 (async () => {
   try {
     const r = await fetch('photo-preset.json'); if (!r.ok) return; const j = await r.json();
-    const im = new Image(); im.src = j.img; await im.decode();
-    const c = document.createElement('canvas'); c.width = im.width; c.height = im.height; c.getContext('2d').drawImage(im, 0, 0);
-    phSetImage(c);
-    const a = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
-    for (let i = 0; i < PH.mask.length; i++) PH.mask[i] = a[i * 4 + 3] >= 128 ? 1 : 0;
-    PH.pts = j.pts.map(p => [p[0], p[1]]); phApplyMask(); $('ph-body').click();
-    $('ph-fitstat').innerHTML = '已載入內建角色（' + (j.name || '照片角色') + '）。' + $('ph-fitstat').innerHTML;
+    PH_CHARS = j.chars || [{name: j.name || '照片角色', front: {img: j.img, pts: j.pts}}];
+    $('ph-chars').innerHTML = PH_CHARS.map((c, i) => `<button aria-pressed="${i === 0}">${c.name}</button>`).join('');
+    $('ph-chars').querySelectorAll('button').forEach((b, i) => b.onclick = () => phUseChar(i));
+    await phUseChar(0);
   } catch (e) { /* 沒有內建角色：照常使用 */ }
 })();
+document.querySelectorAll('#ph-view button').forEach(b => b.onclick = () => phSelectView(b.dataset.v));
 ['p-g', 'p-d', 'p-k'].forEach(id => $(id).addEventListener('input', () => {}));
 $('t-phys').addEventListener('change', () => { PHYS.fresh = true; drawAll(); });
 </script>
