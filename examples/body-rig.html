@@ -741,10 +741,11 @@ const PRESETS = {
   '開合跳': {'rSh.a': 160, 'lSh.a': 160, 'rEl.f': 10, 'lEl.f': 10, 'rHip.a': 28, 'lHip.a': 28},
   '踢腿': {'lHip.f': 90, 'lKn.f': 10, 'lAn.f': 10, 'rKn.f': 5, 'chest.f': -10, 'lSh.f': -30, 'lEl.f': 40, 'rSh.f': 60, 'rEl.f': 20, 'rSh.a': 20},
   '投球': {'rSh.f': 40, 'rSh.a': 90, 'rEl.f': 100, 'lSh.f': 70, 'lSh.a': 30, 'chest.a': -15, 'lHip.f': 50, 'lKn.f': 40, 'rKn.f': 10, 'head.a': 5},
-  '前彎': {'chest.f': 70, 'pelvis.f': 18, 'head.f': 12, 'rSh.f': 45, 'lSh.f': 45, 'rSh.a': 6, 'lSh.a': 6, 'rEl.f': 10, 'lEl.f': 10},
-  '後仰': {'chest.f': -28, 'pelvis.f': -12, 'head.f': -22, 'rSh.a': 10, 'lSh.a': 10, 'rSh.f': -15, 'lSh.f': -15, 'rKn.f': 8, 'lKn.f': 8},
-  '左彎': {'chest.a': 32, 'pelvis.a': 5, 'head.a': 10, 'rSh.a': 4, 'lSh.a': 30, 'lEl.f': 20, 'rEl.f': 5},
-  '右彎': {'chest.a': -32, 'pelvis.a': -5, 'head.a': -10, 'lSh.a': 4, 'rSh.a': 30, 'rEl.f': 20, 'lEl.f': 5},
+  // 骨盆前傾／後傾時，髖關節反向補償同樣角度（rHip.f = lHip.f = 骨盆前傾），腿才會維持垂直、腳不滑
+  '前彎': {'chest.f': 70, 'pelvis.f': 18, 'rHip.f': 18, 'lHip.f': 18, 'head.f': 12, 'rSh.f': 45, 'lSh.f': 45, 'rSh.a': 6, 'lSh.a': 6, 'rEl.f': 10, 'lEl.f': 10},
+  '後仰': {'chest.f': -28, 'pelvis.f': -12, 'rHip.f': -12, 'lHip.f': -12, 'head.f': -22, 'rSh.a': 10, 'lSh.a': 10, 'rSh.f': -15, 'lSh.f': -15},
+  '左彎': {'chest.a': 32, 'head.a': 10, 'rSh.a': 4, 'lSh.a': 30, 'lEl.f': 20, 'rEl.f': 5},
+  '右彎': {'chest.a': -32, 'head.a': -10, 'lSh.a': 4, 'rSh.a': 30, 'rEl.f': 20, 'lEl.f': 5},
 };
 const state = {mode: 'color', pose: {...PRESETS['走路']}, target: null, src: 'both', anim: null, solving: false};
 const $ = id => document.getElementById(id);
@@ -863,7 +864,8 @@ function targets(kind) {
   };
   if (kind === 'spine') {   // 脊椎繞圈：前彎、側彎相差 1/4 週期 → 依序前、側、後、側
     const c = sig(15);
-    return {'chest.f': 18 + 32 * s, 'chest.a': 26 * c, 'pelvis.f': 5 + 6 * s, 'head.f': -6 * s, 'rSh.a': 8, 'lSh.a': 8, 'rEl.f': 10, 'lEl.f': 10};
+    return {'chest.f': 18 + 32 * s, 'chest.a': 26 * c, 'head.f': -6 * s,   // 只動脊椎；骨盆不動，腿和腳底才不會跟著擺
+            'rSh.a': 8, 'lSh.a': 8, 'rEl.f': 10, 'lEl.f': 10};
   }
   const o = (s + 1) / 2, ol = (sig(10) + 1) / 2;
   return {'rSh.a': 8 + 150 * ol, 'lSh.a': 8 + 150 * ol, 'rEl.f': 10 * ol, 'lEl.f': 10 * ol, 'rHip.a': 3 + 24 * o, 'lHip.a': 3 + 24 * o, 'rKn.f': 12 * (1 - o), 'lKn.f': 12 * (1 - o)};
