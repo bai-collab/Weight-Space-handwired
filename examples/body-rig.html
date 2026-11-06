@@ -110,6 +110,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
       <label><input id="t-bones" type="checkbox" checked>顯示骨架</label>
       <label><input id="t-ground" type="checkbox" checked>地面約束</label>
       <label><input id="t-grid" type="checkbox">像素格線</label>
+      <label><input id="t-selout" type="checkbox">選擇性描邊</label>
     </div>
     <div class="toggles" id="phys-bar" hidden>
       <label><input id="t-phys" type="checkbox" checked>衣物物理</label>
@@ -170,6 +171,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
           <div style="display:grid;gap:6px;min-width:0;flex:1">
             <span class="note" id="tl-seg">先設首格和末格。</span>
             <div class="bar" id="tl-presets"></div>
+            <div class="bar"><label class="toggles"><input id="tl-lockcol" type="checkbox" checked>顏色鎖定</label><span class="note">色數</span><input id="tl-lock-k" type="number" min="4" max="64" value="24" style="width:4.5em"></div>
+            <label class="toggles"><input id="tl-follow" type="checkbox">預覽時角色跟著前進</label>
             <button class="chip" id="tl-export" disabled>匯出 sprite sheet（PNG）</button>
           </div>
         </div>
@@ -197,10 +200,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
           <span class="note">色數</span><input id="ph-k" type="number" min="2" max="24" value="12" style="width:4.5em">
           <span class="note">描邊門檻</span><input id="ph-edge" type="range" min="10" max="400" value="160" style="width:90px">
           <label class="toggles"><input id="ph-bg" type="checkbox" checked>去背</label>
+          <label class="toggles"><input id="ph-selout" type="checkbox" checked>選擇性描邊</label>
+          <select id="ph-algo" aria-label="調色盤演算法"><option value="km">調色盤：k-means++（OKLab）</option><option value="mc">調色盤：中位切分（RGB，舊版）</option></select>
           <button class="chip" id="ph-pix" disabled>A：像素化</button>
           <button class="chip" id="ph-save" disabled>下載像素圖</button>
         </div>
         <div class="bar" id="ph-stages" style="align-items:flex-end"></div>
+        <div class="stat" id="ph-qa"></div>
         <p class="note">handwired 管線，每一層的權重都是手寫、固定的：① 平均池化縮小（每格權重 1/k²）② 去背：取邊框的中位色當背景，前景 = ReLU(和背景的距離 − 門檻) &gt; 0 ③ 調色盤：用中位切分法從圖中挑色；每個像素經過線性層，分數 = 2x·c − |c|²，取分數最高的顏色 ④ 去雜點：3×3 多數決（各色 one-hot 做 3×3 全 1 卷積，取最大）⑤ 描邊：亮度做 Sobel 固定卷積，|g| = ReLU(g) + ReLU(−g)，超過門檻、而且比鄰近平均暗的一側（拉普拉斯為正）才畫深色；遮罩外圍用 3×3 取最大（膨脹）補上外框。B 的取色也用 ③ 的方法：取中位色，再乘上固定倍率，得到亮、中、暗三階。</p>
       </details>
 
@@ -310,7 +316,7 @@ function fk(pose, ground) {
       const tf = f ? clampR(pose[f.id] ?? 0, ...f.lim) * f.s * DEG : 0;
       const ta = a ? clampR(pose[a.id] ?? 0, ...a.lim) * a.s * DEG : 0;
       const L = m3(Rz(ta), Rx(tf)), Rp = j.p ? R[IDX[j.p]] : I3;
-      if (!j.p) { R[i] = L; P[i] = add(j.P, [0, dy, 0]); }
+      if (!j.p) { R[i] = L; P[i] = add(j.P, [0, dy, state.rootZ || 0]); }   // rootZ：預覽「跟著前進」時整個人往前移
       else { const pi = IDX[j.p]; R[i] = m3(R[pi], L); P[i] = add(P[pi], mv(R[pi], sub(j.P, JOINTS[pi].P))); }
       AX[i] = {f: mv(m3(Rp, Rz(ta)), [1, 0, 0]), a: mv(Rp, [0, 0, 1])};   // 世界座標下的旋轉軸（給梯度用）
     });
@@ -656,7 +662,7 @@ function draw(view, T) {
       else if (state.mode === 'bone') c = BONECOL[s.bone];
       else c = color(s, r.tt[i], r.rest[i]);
       if (view === 'side' && (g === '右臂' || g === '右腿')) c = c.map(v => v * 0.72);   // 遠側較暗
-      if (edge) c = state.mode === 'color' ? OUTLINE : c.map(v => v * 0.55);
+      if (edge) c = state.mode === 'color' ? ($('t-selout').checked ? selout(c.map(Math.round)) : OUTLINE) : c.map(v => v * 0.55);   // 選擇性描邊：同色相變暗
     }
     img.data.set([c[0], c[1], c[2], id < 0 && state.exporting ? 0 : 255], i * 4);   // 匯出時背景透明
   }
@@ -712,7 +718,7 @@ document.querySelectorAll('[data-mode]').forEach(b => b.addEventListener('click'
   document.querySelectorAll('[data-mode]').forEach(x => x.setAttribute('aria-pressed', x === b));
   $('legend').hidden = state.mode !== 'heat'; drawAll();
 }));
-['t-bones', 't-ground', 't-grid'].forEach(id => $(id).addEventListener('change', drawAll));
+['t-bones', 't-ground', 't-grid', 't-selout'].forEach(id => $(id).addEventListener('change', drawAll));
 
 // ---------- L0–L2：Matsuoka 節律 → 傳導延遲 → 彈簧阻尼 + ReLU 限位 ----------
 const cpg = {x1: 0.1, x2: 0, v1: 0, v2: 0}, hist = [];
@@ -1330,6 +1336,66 @@ $('lpc-real').onclick = () => {
   startPlay();
 };
 
+// ---------- 色彩工具（OKLab）：sRGB → 線性 → 矩陣 → 立方根 → 矩陣，權重全部固定 ----------
+const s2l = v => { v /= 255; return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+const l2s = v => Math.round(255 * Math.min(1, Math.max(0, v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055)));
+function toLab([r, g, b]) {
+  const R = s2l(r), G = s2l(g), B = s2l(b);
+  const l = Math.cbrt(0.4122214708 * R + 0.5363325363 * G + 0.0514459929 * B), m = Math.cbrt(0.2119034982 * R + 0.6806995451 * G + 0.1073969566 * B), s = Math.cbrt(0.0883024619 * R + 0.2817188376 * G + 0.6299787005 * B);
+  return [0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s, 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s, 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s];
+}
+function fromLab([L, a, b]) {
+  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3, m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3, s = (L - 0.0894841775 * a - 1.2914855480 * b) ** 3;
+  return [l2s(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s), l2s(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s), l2s(-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s)];
+}
+const dE = (p, q) => Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]);   // OKLab 色差：0.02 約等於一個看得出來的色階
+const SELOUT = new Map();
+const selout = c => { const k = c.join(','); if (!SELOUT.has(k)) { const L = toLab(c); SELOUT.set(k, fromLab([L[0] * 0.52, L[1] * 1.15, L[2] * 1.15])); } return SELOUT.get(k); };   // 選擇性描邊：同色相變暗
+// 確定性 k-means++（OKLab）：固定種子的亂數 → 同一組輸入每次得到同一個調色盤
+function mulberry32(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+function kmeansLab(pts, K, seed = 7, iters = 12) {
+  if (!pts.length) return [[0, 0, 0]];
+  const step = Math.max(1, Math.floor(pts.length / 6000)), X = pts.filter((_, i) => i % step === 0), rnd = mulberry32(seed);
+  const C = [X[Math.floor(rnd() * X.length)]], D = X.map(p => dE(p, C[0]) ** 2);
+  while (C.length < Math.min(K, X.length)) {
+    const tot = D.reduce((a, v) => a + v, 0); if (tot <= 0) break;
+    let r = rnd() * tot, i = 0; while (i < X.length - 1 && (r -= D[i]) > 0) i++;
+    C.push(X[i]); X.forEach((p, j) => D[j] = Math.min(D[j], dE(p, X[i]) ** 2));
+  }
+  for (let it = 0; it < iters; it++) {
+    const S = C.map(() => [0, 0, 0, 0]), Q = quantLayer(C);
+    for (const p of X) { const k = Q(p); S[k][0] += p[0]; S[k][1] += p[1]; S[k][2] += p[2]; S[k][3]++; }
+    S.forEach((s, k) => { if (s[3]) C[k] = [s[0] / s[3], s[1] / s[3], s[2] / s[3]]; });
+  }
+  return C;
+}
+// 去除孤立像素（第 3 項）：idx 為每格的色號（−1 = 透明）。8 個鄰居都不同色 → 改成鄰居多數色；前景單點 → 刪掉
+function cleanOrphans(idx, w, h) {
+  const out = idx.slice(); let col = 0, alpha = 0;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = y * w + x, v = idx[i]; if (v < 0) continue;
+    const cnt = new Map(); let fg = 0, same = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { if (!dx && !dy) continue; const yy = y + dy, xx = x + dx;
+      if (yy < 0 || xx < 0 || yy >= h || xx >= w) continue; const u = idx[yy * w + xx]; if (u < 0) continue; fg++; if (u === v) same++; cnt.set(u, (cnt.get(u) || 0) + 1); }
+    if (!fg) { out[i] = -1; alpha++; continue; }
+    if (!same) { let bk = v, bv = 0; for (const [k, c] of cnt) if (c > bv) { bv = c; bk = k; } out[i] = bk; col++; }
+  }
+  return {idx: out, col, alpha};
+}
+// 品質檢查（第 5 項）：色數、alpha 階數、孤立像素
+function qaRGBA(data, w, h) {
+  const cols = new Set(), alphas = new Set(); let iso = 0;
+  const key = i => data[i + 3] ? (data[i] << 16 | data[i + 1] << 8 | data[i + 2]) : -1;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = (y * w + x) * 4; alphas.add(data[i + 3]); const k = key(i); if (k < 0) continue; cols.add(k);
+    let same = 0, fg = 0;
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { if (!dx && !dy) continue; const yy = y + dy, xx = x + dx; if (yy < 0 || xx < 0 || yy >= h || xx >= w) continue;
+      const u = key((yy * w + xx) * 4); if (u >= 0) fg++; if (u === k) same++; }
+    if (!same) iso++;
+  }
+  return {colors: cols.size, alpha: alphas.size, iso};
+}
+
 // ---------- 時間軸：關鍵影格＋貝茲補間（同 Spine 的逐格做法） ----------
 // 第 k 格：θ = θa + (θb − θa)·e(t)，t = (k − fa)/(fb − fa)，e 是這一段的 cubic-bezier(x1, y1, x2, y2)
 const TL = {n: 12, keys: [], cur: 0, timer: 0, lock: 'none', drag: -1};
@@ -1390,6 +1456,7 @@ function tlRender() {
   $('tl-play').disabled = $('tl-export').disabled = !ready;
   const seg = tlSegment(TL.cur);
   $('tl-seg').textContent = !ready ? '先設首格和末格。' : seg ? `正在編輯第 ${seg[0].f + 1} → ${seg[1].f + 1} 格這一段的曲線` : '';
+  if (ready && !TL.timer) { TL.stride = tlStride(); $('tl-seg').textContent += `｜建議前進 ${TL.stride.px.toFixed(2)} px／格（${(TL.stride.px * (+$('tl-fps').value || 10)).toFixed(1)} px／秒）`; }
   drawCurve2();
 }
 function drawCurve2() {
@@ -1446,17 +1513,23 @@ $('tl-n').onchange = () => {   // 改格數：關鍵格依比例移到新位置�
 document.querySelectorAll('#tl-lock button').forEach(b => b.onclick = () => {
   TL.lock = b.dataset.lock; document.querySelectorAll('#tl-lock button').forEach(x => x.setAttribute('aria-pressed', x === b)); tlShow(TL.cur);
 });
-function tlStop() { if (!TL.timer) return; clearInterval(TL.timer); TL.timer = 0; $('tl-play').textContent = '▶ 播放'; }
+function tlStop() { if (!TL.timer) return; clearInterval(TL.timer); TL.timer = 0; $('tl-play').textContent = '▶ 播放'; if (state.rootZ) { state.rootZ = 0; drawAll(); } }
 $('tl-play').onclick = () => {
   if (TL.timer) return tlStop();
   stopAnim(); stopPlay(); $('tl-play').textContent = '■ 停止';
-  TL.timer = setInterval(() => tlShow((TL.cur + 1) % TL.n), 1000 / (+$('tl-fps').value || 10));
+  TL.stride = tlStride(); state.rootZ = 0;
+  TL.timer = setInterval(() => {
+    const prev = TL.cur, next = (prev + 1) % TL.n;
+    if ($('tl-follow').checked && TL.stride && next) { state.rootZ += TL.stride.per[prev]; if (state.rootZ > 24) { state.rootZ -= 48; if (BODY === 'anime') PHYS.fresh = true; } }   // 出框就繞回來
+    tlShow(next);
+  }, 1000 / (+$('tl-fps').value || 10));
 };
 // 匯出：N 格 × 正面、側面兩列，每格 81×144、背景透明；動漫體型的衣物物理照每秒格數逐格推進
+// 第 6 項：顏色鎖定（全部格子共用一個 OKLab k-means 調色盤）；第 3 項：去孤立像素；第 5 項：每格品質檢查
 $('tl-export').onclick = async () => {
   tlStop(); stopAnim(); stopPlay();
   const n = TL.n, fps = +$('tl-fps').value || 10, sheet = document.createElement('canvas'); sheet.width = W * n; sheet.height = H * 2;
-  const sc = sheet.getContext('2d'); state.exporting = true;
+  const sc = sheet.getContext('2d'); state.exporting = true; const keepZ = state.rootZ; state.rootZ = 0;
   if (BODY === 'anime') PHYS.fresh = true;
   for (let f = 0; f < n; f++) {
     state.pose = tlPose(f); const T = fk(state.pose, $('t-ground').checked);
@@ -1464,15 +1537,47 @@ $('tl-export').onclick = async () => {
     draw('front', T); sc.drawImage(off, f * W, 0);
     draw('side', T); sc.drawImage(off, f * W, H);
   }
-  state.exporting = false; tlShow(TL.cur);
+  state.exporting = false; state.rootZ = keepZ; tlShow(TL.cur);
+  const img = sc.getImageData(0, 0, sheet.width, sheet.height), d = img.data, cellQA = () => {
+    const q = []; for (let r = 0; r < 2; r++) for (let f = 0; f < n; f++) { const c = sc.getImageData(f * W, r * H, W, H); q.push(qaRGBA(c.data, W, H)); } return q; };
+  const before = cellQA(), lockK = +$('tl-lock-k').value || 0;
+  if ($('tl-lockcol').checked && lockK) {
+    const pts = []; for (let i = 0; i < d.length; i += 4) if (d[i + 3]) pts.push(toLab([d[i], d[i + 1], d[i + 2]]));
+    const palLab = kmeansLab(pts, lockK), pal = palLab.map(fromLab), Q = quantLayer(palLab);
+    for (let r = 0; r < 2; r++) for (let f = 0; f < n; f++) {   // 每一格：量化到共用調色盤 → 去孤立像素 → 寫回
+      const c = sc.getImageData(f * W, r * H, W, H), cd = c.data, idx = new Int16Array(W * H).fill(-1);
+      for (let i = 0; i < W * H; i++) if (cd[i * 4 + 3]) idx[i] = Q(toLab([cd[i * 4], cd[i * 4 + 1], cd[i * 4 + 2]]));
+      const cl = cleanOrphans(idx, W, H).idx;
+      for (let i = 0; i < W * H; i++) { if (cl[i] < 0) { cd.set([0, 0, 0, 0], i * 4); continue; } cd.set([...pal[cl[i]], 255], i * 4); }
+      sc.putImageData(c, f * W, r * H);
+    }
+  }
+  const after = cellQA(), sheetQA = qaRGBA(sc.getImageData(0, 0, sheet.width, sheet.height).data, sheet.width, sheet.height);
+  const rng = (q, k) => `${Math.min(...q.map(x => x[k]))}～${Math.max(...q.map(x => x[k]))}`;
+  TL.qa = {before, after, sheet: sheetQA};
   const blob = await new Promise(r => sheet.toBlob(r, 'image/png')), name = `sprite-${BODY}-${n}f.png`;
+  const qaText = `品質檢查（每格）：色數 ${rng(before, 'colors')} → <b>${rng(after, 'colors')}</b>、孤立像素 ${rng(before, 'iso')} → <b>${rng(after, 'iso')}</b>、alpha 階數 <b>${rng(after, 'alpha')}</b>；整張共 <b>${sheetQA.colors}</b> 色。` +
+    (TL.stride ? ` 建議前進 <b>${TL.stride.px.toFixed(2)} px／格</b>（${(TL.stride.px * fps).toFixed(1)} px／秒）。` : '');
   const dl = window.claude ? await claude.use('downloads') : null;
   try {
     if (dl) await dl.save({filename: name, data: blob});
     else { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 5000); }
-    $('tl-stat').textContent = `已匯出 ${name}：${n} 格 × 2 列（上排正面、下排側面），每格 ${W}×${H}，背景透明。`;
-  } catch (e) { $('tl-stat').textContent = e?.code === 'declined' ? '已取消匯出。' : `無法匯出（${e?.code || e}）。`; }
+    $('tl-stat').innerHTML = `已匯出 ${name}：${n} 格 × 2 列（上排正面、下排側面），每格 ${W}×${H}，背景透明。<br>` + qaText;
+  } catch (e) { $('tl-stat').innerHTML = (e?.code === 'declined' ? '已取消匯出。' : `無法匯出（${e?.code || e}）。`) + '<br>' + qaText; }
 };
+// 第 7 項：跑速。每一格找著地腳（腳踝較低的那隻），量它相對身體往後移多少；身體就該往前移同樣的量
+function tlStride() {
+  const n = TL.n; if (tlKeys().length < 2) return null;
+  const T = Array.from({length: n}, (_, f) => fk(tlPose(f), $('t-ground').checked)), ank = (t, sd) => t.P[IDX[sd + 'An']];
+  const per = [];
+  for (let f = 0; f < n; f++) {
+    const t0 = T[f], t1 = T[(f + 1) % n], sd = ank(t0, 'l')[1] > ank(t0, 'r')[1] ? 'l' : 'r';   // y 往下為正：較大 = 較低 = 著地
+    per.push(relu(ank(t0, sd)[2] - ank(t1, sd)[2]));   // 著地腳往後（z 減少）的量
+  }
+  const loop = per.slice(0, n - 1), px = loop.reduce((a, v) => a + v, 0) / Math.max(1, loop.length);
+  return {px, per};
+}
+
 tlRender();
 Object.entries(MAT).forEach(([k, v]) => MAT0[k] = v.map(c => [...c]));
 
@@ -1611,7 +1716,7 @@ function medianCut(px, K) {   // 中位切分：反覆把範圍最大的盒子�
   return boxes.map(b => [0, 1, 2].map(c => Math.round(b.reduce((a, p) => a + p[c], 0) / b.length)));
 }
 function phPixelize() {
-  const src = PH.img, w = Math.max(16, Math.min(160, +$('ph-w').value || 64)), h = Math.round(src.height / src.width * w), K = Math.max(2, Math.min(24, +$('ph-k').value || 12));
+  const src = PH.img, w = Math.max(16, Math.min(160, +$('ph-w').value || 64)), h = Math.round(src.height / src.width * w), K = Math.max(2, Math.min(32, +$('ph-k').value || 12));
   const sd = src.getContext('2d').getImageData(0, 0, src.width, src.height).data, kx = src.width / w, ky = src.height / h;
   // ① 平均池化（每格權重 1/k²）
   const A = new Float32Array(w * h * 3);
@@ -1621,47 +1726,63 @@ function phPixelize() {
       for (let xx = Math.floor(x * kx); xx < Math.max(Math.floor(x * kx) + 1, Math.floor((x + 1) * kx)); xx++) { const i = (yy * src.width + xx) * 4; r += sd[i]; g += sd[i + 1]; b += sd[i + 2]; n++; }
     A.set([r / n, g / n, b / n], (y * w + x) * 3);
   }
-  const px = i => [A[i * 3], A[i * 3 + 1], A[i * 3 + 2]], N = w * h;
-  // ② 去背：邊框中位色當背景，ReLU(距離 − 門檻) > 0 才算前景
-  const border = []; for (let x = 0; x < w; x++) border.push(px(x), px((h - 1) * w + x)); for (let y = 0; y < h; y++) border.push(px(y * w), px(y * w + w - 1));
+  const N = w * h, px = i => [A[i * 3], A[i * 3 + 1], A[i * 3 + 2]], LAB = Array.from({length: N}, (_, i) => toLab(px(i)));
+  // ② 去背：邊框中位色當背景；前景 = ReLU(OKLab 距離 − 門檻) > 0
+  const border = []; for (let x = 0; x < w; x++) border.push(LAB[x], LAB[(h - 1) * w + x]); for (let y = 0; y < h; y++) border.push(LAB[y * w], LAB[y * w + w - 1]);
   const bg = [0, 1, 2].map(c => median(border.map(p => p[c]))), mask = new Uint8Array(N).fill(1);
-  if ($('ph-bg').checked) for (let i = 0; i < N; i++) { const p = px(i); mask[i] = relu(Math.hypot(p[0] - bg[0], p[1] - bg[1], p[2] - bg[2]) - 38) > 0 ? 1 : 0; }
-  // ③ 調色盤（中位切分）＋線性量化層
-  const fg = []; for (let i = 0; i < N; i++) if (mask[i]) fg.push(px(i));
-  const pal = medianCut(fg.length ? fg : [[0, 0, 0]], K), Q = quantLayer(pal), idx = new Int16Array(N).fill(-1);
-  for (let i = 0; i < N; i++) if (mask[i]) idx[i] = Q(px(i));
-  // ④ 3×3 多數決（各色 one-hot 做 3×3 全 1 卷積，取最大；平手保留原色）
+  if ($('ph-bg').checked) for (let i = 0; i < N; i++) mask[i] = relu(dE(LAB[i], bg) - 0.035) > 0 ? 1 : 0;
+  // ③ 調色盤＋線性量化層（OKLab）
+  const fgIdx = []; for (let i = 0; i < N; i++) if (mask[i]) fgIdx.push(i);
+  const algo = $('ph-algo').value;
+  const palLab = algo === 'mc' ? medianCut(fgIdx.map(px), K).map(toLab) : kmeansLab(fgIdx.map(i => LAB[i]), K);
+  const pal = palLab.map(fromLab), Q = algo === 'mc' ? (i => quantLayer(pal)(px(i))) : (() => { const q = quantLayer(palLab); return i => q(LAB[i]); })();
+  const idx = new Int16Array(N).fill(-1); for (const i of fgIdx) idx[i] = Q(i);
+  // ④ 3×3 多數決（one-hot × 全 1 卷積，取最大；平手保留原色）
   const idx2 = idx.slice();
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const i = y * w + x; if (idx[i] < 0) continue; const cnt = new Map();
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const yy = y + dy, xx = x + dx; if (yy < 0 || xx < 0 || yy >= h || xx >= w) continue; const v = idx[yy * w + xx]; if (v >= 0) cnt.set(v, (cnt.get(v) || 0) + 1); }
     let bv = cnt.get(idx[i]), bk = idx[i]; for (const [k, v] of cnt) if (v > bv) { bv = v; bk = k; } idx2[i] = bk;
   }
-  // ⑤ 描邊：亮度 Sobel，|g| = ReLU(g) + ReLU(−g)；遮罩外圍用 3×3 取最大（膨脹）補外框
-  const L = i => { const p = px(i); return 0.299 * p[0] + 0.587 * p[1] + 0.114 * p[2]; }, edge = new Uint8Array(N), th = +$('ph-edge').value;
+  // 第 3 項：去除孤立像素（顏色孤點、前景單點）
+  const cl = cleanOrphans(idx2, w, h), idx3 = cl.idx, fin = i => idx3[i] >= 0;
+  // ⑤ 描邊：亮度 Sobel，|g| = ReLU(g) + ReLU(−g)，超過門檻、而且比鄰近平均暗才畫；外框用 3×3 取最大（膨脹）
+  const Lm = i => { const q = px(i); return 0.299 * q[0] + 0.587 * q[1] + 0.114 * q[2]; }, edge = new Uint8Array(N), th = +$('ph-edge').value;
   const KX = [[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], KY = [[-1, -2, -1], [0, 0, 0], [1, 2, 1]];
   for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
-    let gx = 0, gy = 0; for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) { const l = L((y + a) * w + x + b); gx += KX[a + 1][b + 1] * l; gy += KY[a + 1][b + 1] * l; }
-    const mag = relu(gx) + relu(-gx) + relu(gy) + relu(-gy);
-    let nb = 0; for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) nb += L((y + a) * w + x + b) / 9;
-    // 只畫在暗的那一側（拉普拉斯為正 → 比鄰近平均暗），線條才不會變成兩條
-    edge[y * w + x] = relu(mag - th) > 0 && relu(nb - L(y * w + x)) > 0 && mask[y * w + x] ? 1 : 0;
+    const i = y * w + x; if (!fin(i)) continue;
+    let gx = 0, gy = 0, nb = 0; for (let a = -1; a <= 1; a++) for (let b = -1; b <= 1; b++) { const l = Lm((y + a) * w + x + b); gx += KX[a + 1][b + 1] * l; gy += KY[a + 1][b + 1] * l; nb += l / 9; }
+    edge[i] = relu(relu(gx) + relu(-gx) + relu(gy) + relu(-gy) - th) > 0 && relu(nb - Lm(i)) > 0 ? 1 : 0;
   }
-  const outer = new Uint8Array(N);
-  if ($('ph-bg').checked) for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = y * w + x; if (mask[i]) continue; let m = 0; for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const yy = y + dy, xx = x + dx; if (yy >= 0 && xx >= 0 && yy < h && xx < w) m = Math.max(m, mask[yy * w + xx]); } outer[i] = m; }
-  const dark = pal.reduce((a, c) => c[0] + c[1] + c[2] < a[0] + a[1] + a[2] ? c : a, [255, 255, 255]).map(v => Math.round(v * 0.6));
+  const outer = new Int16Array(N).fill(-1);   // 外框：記住旁邊最多的前景色，供選擇性描邊用
+  if ($('ph-bg').checked) for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = y * w + x; if (fin(i)) continue; const cnt = new Map();
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const yy = y + dy, xx = x + dx; if (yy >= 0 && xx >= 0 && yy < h && xx < w) { const v = idx3[yy * w + xx]; if (v >= 0) cnt.set(v, (cnt.get(v) || 0) + 1); } }
+    let bk = -1, bv = 0; for (const [k, v] of cnt) if (v > bv) { bv = v; bk = k; } outer[i] = bk; }
+  const dark = pal.reduce((a, c) => c[0] + c[1] + c[2] < a[0] + a[1] + a[2] ? c : a, [255, 255, 255]).map(v => Math.round(v * 0.6)), so = $('ph-selout').checked;
+  const lineCol = k => so ? selout(pal[k]) : dark;
+  const final0 = i => outer[i] >= 0 ? lineCol(outer[i]) : fin(i) ? (edge[i] ? lineCol(idx3[i]) : pal[idx3[i]]) : null;
+  // 描邊後再清一次孤立像素（斷掉的描邊單點也算），結果只會用到既有的顏色
+  const fcols = [], fkey = new Map(), fidx = new Int16Array(N).fill(-1);
+  for (let i = 0; i < N; i++) { const c = final0(i); if (!c) continue; const k = c.join(','); if (!fkey.has(k)) { fkey.set(k, fcols.length); fcols.push(c); } fidx[i] = fkey.get(k); }
+  const cl2 = cleanOrphans(fidx, w, h), final = i => cl2.idx[i] >= 0 ? fcols[cl2.idx[i]] : null;
   // 組合與各階段縮圖
   const mk = fn => { const c = document.createElement('canvas'); c.width = w; c.height = h; const g = c.getContext('2d'), im = g.createImageData(w, h);
     for (let i = 0; i < N; i++) { const v = fn(i); if (v) im.data.set([...v, 255], i * 4); } g.putImageData(im, 0, 0); return c; };
   const stages = [['① 縮小', i => px(i).map(Math.round)], ['② 去背', i => mask[i] ? [255, 255, 255] : null], ['③ 量化', i => idx[i] >= 0 ? pal[idx[i]] : null],
-    ['④ 去雜點', i => idx2[i] >= 0 ? pal[idx2[i]] : null], ['⑤ 描邊', i => edge[i] || outer[i] ? [255, 255, 255] : null],
-    ['結果', i => outer[i] || edge[i] ? dark : idx2[i] >= 0 ? pal[idx2[i]] : null]];
+    ['④ 去雜點', i => fin(i) ? pal[idx3[i]] : null], ['⑤ 描邊', i => edge[i] || outer[i] >= 0 ? [255, 255, 255] : null], ['結果', final]];
   $('ph-stages').innerHTML = '';
   stages.forEach(([n, fn]) => { const c = mk(fn), box = document.createElement('div'); box.style.cssText = 'display:grid;gap:2px;justify-items:center';
     c.style.cssText = `width:${n === '結果' ? 160 : 72}px;height:auto;aspect-ratio:${w}/${h};image-rendering:pixelated;background:var(--stage);border-radius:3px`;
     const t = document.createElement('span'); t.className = 'note'; t.textContent = n; box.append(c, t); $('ph-stages').append(box); if (n === '結果') PH.out = c; });
+  // 第 5 項：品質檢查
+  const qa = qaRGBA(PH.out.getContext('2d').getImageData(0, 0, w, h).data, w, h);
+  let sum = 0, nf = 0, bad = 0;
+  for (const i of fgIdx) { if (!fin(i) || edge[i]) continue; const e = dE(LAB[i], toLab(pal[idx3[i]])); sum += e; nf++; if (e > 0.08) bad++; }
+  const mis = nf ? bad / nf : 0;
+  PH.qa = {...qa, dE: nf ? sum / nf : 0, mis, orphansFixed: cl.col + cl.alpha + cl2.col + cl2.alpha};
+  $('ph-qa').innerHTML = `品質檢查：色數 <b>${qa.colors}</b>、alpha 階數 <b>${qa.alpha}</b>、孤立像素 <b>${qa.iso}</b>（已清掉 ${PH.qa.orphansFixed} 個）、量化平均色差 <b>${PH.qa.dE.toFixed(3)}</b>（OKLab）、和縮小圖差太多的像素 <b>${(mis * 100).toFixed(1)}%</b>${mis > 0.05 ? ' ⚠️ 超過 5%，可增加色數' : ''}`;
   $('ph-save').disabled = false;
-  return {w, h, K: pal.length, fg: fg.length};
+  return {w, h, K: pal.length, fg: fgIdx.length};
 }
 $('ph-pix').onclick = () => { if (PH.img) phPixelize(); };
 $('ph-save').onclick = async () => {
