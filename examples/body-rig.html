@@ -188,6 +188,25 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
           <span class="note">圖片只在你的瀏覽器裡處理，不會上傳。</span>
         </div>
         <div class="stat" id="ph-tip">先選一張全身、正面站立的圖片。</div>
+        <div class="bar">
+          <div class="seg" id="ph-mode" role="group" aria-label="在圖上點擊的作用">
+            <button aria-pressed="true" data-m="pts">點關節</button><button aria-pressed="false" data-m="wand">② 魔術棒</button><button aria-pressed="false" data-m="keep">④ 保留筆刷</button><button aria-pressed="false" data-m="erase">④ 刪除筆刷</button>
+          </div>
+        </div>
+        <div class="bar">
+          <span class="note">去背</span>
+          <button class="chip ph-cut" id="ph-cut-auto" disabled>① 自動（邊框色）</button>
+          <button class="chip ph-cut" id="ph-cut-skel" disabled>③ 骨架引導</button>
+          <button class="chip ph-cut" id="ph-cut-undo" disabled>復原</button>
+          <button class="chip ph-cut" id="ph-cut-reset" disabled>全部保留</button>
+          <button class="chip ph-cut" id="ph-cut-save" disabled>下載去背圖</button>
+        </div>
+        <div class="bar">
+          <span class="note">容許度</span><input id="ph-tol" type="range" min="5" max="150" value="35" style="width:90px">
+          <span class="note">筆刷大小</span><input id="ph-brush" type="range" min="2" max="40" value="10" style="width:90px">
+          <label class="toggles"><input id="ph-ghost" type="checkbox" checked>半透明顯示被挖掉的部分</label>
+          <span class="stat" id="ph-cutstat"></span>
+        </div>
         <canvas id="ph-cv" width="10" height="10" hidden style="width:100%;height:auto;aspect-ratio:auto;image-rendering:auto;cursor:crosshair;touch-action:none;border-radius:4px" aria-label="在圖片上點關節"></canvas>
         <div class="bar">
           <button class="primary" id="ph-fit" disabled>B：反推姿勢＋取色，套到目前體型</button>
@@ -199,7 +218,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
           <span class="note">A：像素化寬度</span><input id="ph-w" type="number" min="16" max="160" value="64" style="width:4.5em">
           <span class="note">色數</span><input id="ph-k" type="number" min="2" max="24" value="12" style="width:4.5em">
           <span class="note">描邊門檻</span><input id="ph-edge" type="range" min="10" max="400" value="160" style="width:90px">
-          <label class="toggles"><input id="ph-bg" type="checkbox" checked>去背</label>
+          <label class="toggles"><input id="ph-bg" type="checkbox">再用邊框色去背</label>
           <label class="toggles"><input id="ph-selout" type="checkbox" checked>選擇性描邊</label>
           <select id="ph-algo" aria-label="調色盤演算法"><option value="km">調色盤：k-means++（OKLab）</option><option value="mc">調色盤：中位切分（RGB，舊版）</option></select>
           <button class="chip" id="ph-pix" disabled>A：像素化</button>
@@ -207,7 +226,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
         </div>
         <div class="bar" id="ph-stages" style="align-items:flex-end"></div>
         <div class="stat" id="ph-qa"></div>
-        <p class="note">handwired 管線，每一層的權重都是手寫、固定的：① 平均池化縮小（每格權重 1/k²）② 去背：取邊框的中位色當背景，前景 = ReLU(和背景的距離 − 門檻) &gt; 0 ③ 調色盤：用中位切分法從圖中挑色；每個像素經過線性層，分數 = 2x·c − |c|²，取分數最高的顏色 ④ 去雜點：3×3 多數決（各色 one-hot 做 3×3 全 1 卷積，取最大）⑤ 描邊：亮度做 Sobel 固定卷積，|g| = ReLU(g) + ReLU(−g)，超過門檻、而且比鄰近平均暗的一側（拉普拉斯為正）才畫深色；遮罩外圍用 3×3 取最大（膨脹）補上外框。B 的取色也用 ③ 的方法：取中位色，再乘上固定倍率，得到亮、中、暗三階。</p>
+        <p class="note">handwired 管線，每一層的權重都是手寫、固定的：① 平均池化縮小（預乘 alpha，被挖掉的背景不混進來）② 遮罩：去背工具留下的覆蓋率 ≥ 0.5 才算前景（可選再用邊框色去背） ③ 調色盤：用中位切分法從圖中挑色；每個像素經過線性層，分數 = 2x·c − |c|²，取分數最高的顏色 ④ 去雜點：3×3 多數決（各色 one-hot 做 3×3 全 1 卷積，取最大）⑤ 描邊：亮度做 Sobel 固定卷積，|g| = ReLU(g) + ReLU(−g)，超過門檻、而且比鄰近平均暗的一側（拉普拉斯為正）才畫深色；遮罩外圍用 3×3 取最大（膨脹）補上外框。B 的取色也用 ③ 的方法：取中位色，再乘上固定倍率，得到亮、中、暗三階。</p>
       </details>
 
       <details class="fit" id="lpc-sec">
@@ -1586,10 +1605,6 @@ const PH = {img: null, pts: [], drag: -1, out: null};
 const PH_J = [['head', '臉的中心'], ['neck', '脖子（下巴下方）'], ['rSh', '角色的右肩（圖的左側）'], ['rEl', '右手肘'], ['rWr', '右手腕'],
   ['lSh', '角色的左肩（圖的右側）'], ['lEl', '左手肘'], ['lWr', '左手腕'], ['rHip', '右髖'], ['rKn', '右膝'], ['rAn', '右腳踝'],
   ['lHip', '左髖'], ['lKn', '左膝'], ['lAn', '左腳踝']];
-function phSetImage(c) {
-  PH.img = c; PH.pts = []; $('ph-cv').hidden = false; $('ph-cv').width = c.width; $('ph-cv').height = c.height;
-  $('ph-pix').disabled = false; phDraw();
-}
 function phLoad(file) {
   const im = new Image();
   im.onload = () => {
@@ -1600,8 +1615,106 @@ function phLoad(file) {
   im.src = URL.createObjectURL(file);
 }
 $('ph-file').onchange = e => { const f = e.target.files[0]; if (f) phLoad(f); };
+// ---------- 去背（四種 handwired 工具，都改同一張遮罩 PH.mask：1 = 人物、0 = 背景） ----------
+function phSetImage(c) {
+  PH.src = c; PH.pts = []; PH.mask = new Uint8Array(c.width * c.height).fill(1); PH.hist = []; PH.lab = null;
+  PH.img = document.createElement('canvas'); PH.img.width = c.width; PH.img.height = c.height;
+  $('ph-cv').hidden = false; $('ph-cv').width = c.width; $('ph-cv').height = c.height;
+  $('ph-pix').disabled = false; document.querySelectorAll('.ph-cut').forEach(b => b.disabled = false); phApplyMask();
+}
+function phLab() {   // 每個像素的 OKLab（第一次用到才算）
+  if (PH.lab) return PH.lab;
+  const d = PH.src.getContext('2d').getImageData(0, 0, PH.src.width, PH.src.height).data, n = PH.src.width * PH.src.height, L = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) L.set(toLab([d[i * 4], d[i * 4 + 1], d[i * 4 + 2]]), i * 3);
+  return PH.lab = L;
+}
+const labAt = i => [PH.lab[i * 3], PH.lab[i * 3 + 1], PH.lab[i * 3 + 2]];
+function phApplyMask() {   // 原圖 × 遮罩 → PH.img（被挖掉的像素 alpha = 0）
+  const g = PH.img.getContext('2d'), im = PH.src.getContext('2d').getImageData(0, 0, PH.src.width, PH.src.height);
+  for (let i = 0; i < PH.mask.length; i++) if (!PH.mask[i]) im.data[i * 4 + 3] = 0;
+  g.putImageData(im, 0, 0);
+  const fg = PH.mask.reduce((a, v) => a + v, 0);
+  $('ph-cutstat').textContent = `保留 ${(fg / PH.mask.length * 100).toFixed(1)}% 的像素`;
+  $('ph-cut-undo').disabled = !PH.hist.length; phDraw();
+}
+const phPush = () => { PH.hist.push(PH.mask.slice()); if (PH.hist.length > 20) PH.hist.shift(); };
+const phTol = () => +$('ph-tol').value / 1000;   // 容許度（OKLab 色差）
+// ① 自動：邊框中位色當背景，前景 = ReLU(色差 − 容許度) > 0
+function cutAuto() {
+  phLab(); phPush(); const w = PH.src.width, h = PH.src.height, B = [];
+  for (let x = 0; x < w; x += 2) B.push(labAt(x), labAt((h - 1) * w + x)); for (let y = 0; y < h; y += 2) B.push(labAt(y * w), labAt(y * w + w - 1));
+  const bg = [0, 1, 2].map(c => median(B.map(p => p[c]))), t = phTol();
+  for (let i = 0; i < PH.mask.length; i++) if (PH.mask[i]) PH.mask[i] = relu(dE(labAt(i), bg) - t) > 0 ? 1 : 0;
+  growLineart(); phApplyMask();
+}
+// ② 魔術棒：從點的位置往外擴散（4 鄰居），每一步的閘門 = ReLU(容許度 − 和起點的色差) > 0
+function cutWand(x, y) {
+  phLab(); phPush(); const w = PH.src.width, h = PH.src.height, s0 = Math.round(y) * w + Math.round(x), seed = labAt(s0), t = phTol();
+  const seen = new Uint8Array(w * h), q = [s0]; seen[s0] = 1;
+  while (q.length) {
+    const i = q.pop(); PH.mask[i] = 0; const xi = i % w, yi = (i / w) | 0;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const xx = xi + dx, yy = yi + dy; if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+      const j = yy * w + xx; if (seen[j]) continue; seen[j] = 1; if (relu(t - dE(labAt(j), seed)) > 0) q.push(j); }
+  }
+  phApplyMask();
+}
+// ③ 骨架引導：骨頭當「人物」種子、邊框當「背景」種子，兩邊同時往外擴散；
+//    每個像素歸給「路徑上最大色差最小」的那一邊（minimax 路徑，等同分水嶺），交界就是輪廓
+function cutSkeleton() {
+  if (PH.pts.length < PH_J.length) { $('ph-cutstat').textContent = '先點完 14 個關節，才能用骨架引導。'; return; }
+  phLab(); phPush(); const w = PH.src.width, h = PH.src.height, N = w * h, lab = new Int8Array(N), cost = new Float32Array(N).fill(Infinity);
+  const at = k => PH.pts[PH_J.findIndex(j => j[0] === k)], mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  const hip = mid(at('rHip'), at('lHip')), S = [];
+  const bones = [['head', 'neck'], ['neck', 'rSh'], ['rSh', 'rEl'], ['rEl', 'rWr'], ['neck', 'lSh'], ['lSh', 'lEl'], ['lEl', 'lWr'], ['rHip', 'rKn'], ['rKn', 'rAn'], ['lHip', 'lKn'], ['lKn', 'lAn'], ['rHip', 'lHip']];
+  const seg = (p, q) => { const n = Math.ceil(Math.hypot(q[0] - p[0], q[1] - p[1])); for (let k = 0; k <= n; k++) { const x = Math.round(p[0] + (q[0] - p[0]) * k / n), y = Math.round(p[1] + (q[1] - p[1]) * k / n); if (x >= 0 && y >= 0 && x < w && y < h) S.push([y * w + x, 1]); } };
+  bones.forEach(([a, b]) => seg(at(a), at(b))); seg(at('neck'), hip);
+  for (let x = 0; x < w; x++) S.push([x, -1], [(h - 1) * w + x, -1]); for (let y = 0; y < h; y++) S.push([y * w, -1], [y * w + w - 1, -1]);
+  // 離所有骨頭都夠遠的像素一定是背景，也當背景種子（被手臂圍住的背景才搶得到）：
+  // 門檻 = 軀幹長 × 0.35；頭部用「臉中心到脖子」× 2.2 的圓，避免剪到頭髮
+  const torso = Math.hypot(hip[0] - at('neck')[0], hip[1] - at('neck')[1]), R = torso * 0.35, RH = Math.hypot(at('head')[0] - at('neck')[0], at('head')[1] - at('neck')[1]) * 2.2;
+  const segs = bones.map(([a, b]) => [at(a), at(b)]).concat([[at('neck'), hip]]), hd = at('head');
+  const dseg = (x, y, [p, q]) => { const vx = q[0] - p[0], vy = q[1] - p[1], L2 = vx * vx + vy * vy || 1, t = Math.min(1, relu(((x - p[0]) * vx + (y - p[1]) * vy) / L2)); return Math.hypot(x - p[0] - t * vx, y - p[1] - t * vy); };
+  for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x += 2) {
+    if (Math.hypot(x - hd[0], y - hd[1]) < RH) continue;
+    let near = false; for (const sg of segs) if (dseg(x, y, sg) < R) { near = true; break; }
+    if (!near) S.push([y * w + x, -1]);
+  }
+  // 分桶佇列：色差量化成 0～255 桶，依桶由小到大擴散
+  const Bk = Array.from({length: 256}, () => []);
+  for (const [i, l] of S) { if (lab[i] && lab[i] !== l) continue; lab[i] = l; cost[i] = 0; Bk[0].push(i); }
+  for (let b = 0; b < 256; b++) { const q = Bk[b];
+    while (q.length) { const i = q.pop(); if (cost[i] < b) continue; const xi = i % w, yi = (i / w) | 0, li = labAt(i);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const xx = xi + dx, yy = yi + dy; if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+        const j = yy * w + xx, c = Math.max(b, Math.min(255, Math.round(dE(labAt(j), li) * 1000)));
+        if (c < cost[j]) { cost[j] = c; lab[j] = lab[i]; Bk[c].push(j); } } } }
+  for (let i = 0; i < N; i++) PH.mask[i] = lab[i] > 0 ? 1 : 0;
+  growLineart(); phApplyMask();
+}
+// 描線歸人物：動漫圖的深色描線介於人物和背景之間，常被分到背景。
+// 把「緊貼人物、亮度 L < 0.45、又比旁邊的人物像素暗 0.05 以上（或和旁邊剛併進來的描線一樣暗）」的像素逐步併回，最多 8 輪（閘門都是 ReLU）
+function growLineart() {
+  const w = PH.src.width, h = PH.src.height;
+  for (let it = 0; it < 8; it++) {
+    const add = [];
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x; if (PH.mask[i]) continue; const L = PH.lab[i * 3]; if (!(relu(0.45 - L) > 0)) continue;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) { const xx = x + dx, yy = y + dy; if (xx < 0 || yy < 0 || xx >= w || yy >= h) continue;
+        const j = yy * w + xx, Lj = PH.lab[j * 3];   // 鄰居是人物，而且比較亮；或鄰居是剛併進來、一樣暗的描線
+        if (PH.mask[j] && (relu(Lj - L - 0.05) > 0 || (relu(0.03 - Math.abs(Lj - L)) > 0 && relu(0.45 - Lj) > 0))) { add.push(i); break; } }
+    }
+    if (!add.length) break; for (const i of add) PH.mask[i] = 1;
+  }
+}
+// ④ 筆刷：保留（1）或刪除（0）
+function cutBrush(x, y, v) { const w = PH.src.width, h = PH.src.height, r = +$('ph-brush').value;
+  for (let yy = Math.max(0, Math.round(y - r)); yy <= Math.min(h - 1, Math.round(y + r)); yy++) for (let xx = Math.max(0, Math.round(x - r)); xx <= Math.min(w - 1, Math.round(x + r)); xx++)
+    if ((xx - x) ** 2 + (yy - y) ** 2 <= r * r) PH.mask[yy * w + xx] = v; }
+let phChecker = null;
 function phDraw() {
   const cv = $('ph-cv'), ctx = cv.getContext('2d'), k = cv.width / 300;
+  if (!phChecker) { const t = document.createElement('canvas'); t.width = t.height = 16; const g = t.getContext('2d'); g.fillStyle = '#cfd5e0'; g.fillRect(0, 0, 16, 16); g.fillStyle = '#eef1f6'; g.fillRect(0, 0, 8, 8); g.fillRect(8, 8, 8, 8); phChecker = ctx.createPattern(t, 'repeat'); }
+  ctx.fillStyle = phChecker; ctx.fillRect(0, 0, cv.width, cv.height);
+  if ($('ph-ghost').checked) { ctx.globalAlpha = 0.25; ctx.drawImage(PH.src, 0, 0); ctx.globalAlpha = 1; }
   ctx.drawImage(PH.img, 0, 0);
   ctx.lineWidth = 2 * k; ctx.strokeStyle = 'rgba(240,135,92,.9)';
   const at = key => PH.pts[PH_J.findIndex(j => j[0] === key)];
@@ -1611,21 +1724,40 @@ function phDraw() {
   PH.pts.forEach((p, i) => { ctx.fillStyle = i === PH.drag ? '#fff' : '#d9653b'; ctx.beginPath(); ctx.arc(p[0], p[1], 4 * k, 0, 7); ctx.fill();
     ctx.fillStyle = '#fff'; ctx.font = `${9 * k}px sans-serif`; ctx.fillText(i + 1, p[0] + 5 * k, p[1] - 5 * k); });
   const n = PH.pts.length;
-  $('ph-tip').textContent = n < PH_J.length ? `請點第 ${n + 1}／${PH_J.length} 個：${PH_J[n][1]}` : '14 個點都點好了。可以拖動修正，然後按 B。';
+  $('ph-tip').textContent = PH.mode !== 'pts' ? {wand: '魔術棒：點一下背景，把相連、顏色相近的區域挖掉。', keep: '保留筆刷：在要留下的地方拖曳。', erase: '刪除筆刷：在要挖掉的地方拖曳。'}[PH.mode]
+    : n < PH_J.length ? `請點第 ${n + 1}／${PH_J.length} 個：${PH_J[n][1]}` : '14 個點都點好了。可以拖動修正，然後按 B（也可以用骨架引導去背）。';
   $('ph-fit').disabled = n < PH_J.length; $('ph-undo').disabled = $('ph-clear').disabled = !n;
 }
 const phPos = e => { const r = $('ph-cv').getBoundingClientRect(), k = $('ph-cv').width / r.width; return [(e.clientX - r.left) * k, (e.clientY - r.top) * k]; };
+PH.mode = 'pts';
+document.querySelectorAll('#ph-mode button').forEach(b => b.onclick = () => {
+  PH.mode = b.dataset.m; document.querySelectorAll('#ph-mode button').forEach(x => x.setAttribute('aria-pressed', x === b)); if (PH.src) phDraw(); });
 $('ph-cv').addEventListener('pointerdown', e => {
   const q = phPos(e), k = $('ph-cv').width / $('ph-cv').getBoundingClientRect().width;
+  if (PH.mode === 'wand') return cutWand(...q);
+  if (PH.mode === 'keep' || PH.mode === 'erase') { phPush(); PH.painting = true; $('ph-cv').setPointerCapture(e.pointerId); cutBrush(...q, PH.mode === 'keep' ? 1 : 0); return phApplyMask(); }
   const i = PH.pts.findIndex(p => Math.hypot(p[0] - q[0], p[1] - q[1]) < 10 * k);
   if (i >= 0) { PH.drag = i; $('ph-cv').setPointerCapture(e.pointerId); }
   else if (PH.pts.length < PH_J.length) PH.pts.push(q);
   phDraw();
 });
-$('ph-cv').addEventListener('pointermove', e => { if (PH.drag < 0) return; PH.pts[PH.drag] = phPos(e); phDraw(); });
-$('ph-cv').addEventListener('pointerup', () => { PH.drag = -1; phDraw(); });
+$('ph-cv').addEventListener('pointermove', e => {
+  if (PH.painting) { cutBrush(...phPos(e), PH.mode === 'keep' ? 1 : 0); return phApplyMask(); }
+  if (PH.drag < 0) return; PH.pts[PH.drag] = phPos(e); phDraw();
+});
+$('ph-cv').addEventListener('pointerup', () => { PH.drag = -1; PH.painting = false; phDraw(); });
 $('ph-undo').onclick = () => { PH.pts.pop(); phDraw(); };
 $('ph-clear').onclick = () => { PH.pts = []; phDraw(); };
+$('ph-cut-auto').onclick = cutAuto;
+$('ph-cut-skel').onclick = cutSkeleton;
+$('ph-cut-undo').onclick = () => { if (!PH.hist.length) return; PH.mask = PH.hist.pop(); phApplyMask(); };
+$('ph-cut-reset').onclick = () => { phPush(); PH.mask.fill(1); phApplyMask(); };
+$('ph-ghost').onchange = () => PH.src && phDraw();
+$('ph-cut-save').onclick = async () => {
+  const blob = await new Promise(r => PH.img.toBlob(r, 'image/png')), name = `cutout-${PH.img.width}x${PH.img.height}.png`, dl = window.claude ? await claude.use('downloads') : null;
+  try { if (dl) await dl.save({filename: name, data: blob}); else { const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click(); } }
+  catch (e) { $('ph-cutstat').textContent = e?.code === 'declined' ? '已取消下載。' : `無法下載（${e?.code || e}）。`; }
+};
 
 // B-1：2D 關節 → 22 個角度。模型關節做正面投影後，和照片點做「縮放＋平移」最小平方對齊（閉式解），
 //      再用逐關節試探降低殘差；只有一個視角時深度不確定，所以加自然姿勢先驗
@@ -1719,18 +1851,21 @@ function phPixelize() {
   const src = PH.img, w = Math.max(16, Math.min(160, +$('ph-w').value || 64)), h = Math.round(src.height / src.width * w), K = Math.max(2, Math.min(32, +$('ph-k').value || 12));
   const sd = src.getContext('2d').getImageData(0, 0, src.width, src.height).data, kx = src.width / w, ky = src.height / h;
   // ① 平均池化（每格權重 1/k²）
-  const A = new Float32Array(w * h * 3);
+  const A = new Float32Array(w * h * 3), COV = new Float32Array(w * h);
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-    let r = 0, g = 0, b = 0, n = 0;
+    let r = 0, g = 0, b = 0, n = 0, a = 0;   // 預乘 alpha：被挖掉的背景不會混進邊緣顏色
     for (let yy = Math.floor(y * ky); yy < Math.max(Math.floor(y * ky) + 1, Math.floor((y + 1) * ky)); yy++)
-      for (let xx = Math.floor(x * kx); xx < Math.max(Math.floor(x * kx) + 1, Math.floor((x + 1) * kx)); xx++) { const i = (yy * src.width + xx) * 4; r += sd[i]; g += sd[i + 1]; b += sd[i + 2]; n++; }
-    A.set([r / n, g / n, b / n], (y * w + x) * 3);
+      for (let xx = Math.floor(x * kx); xx < Math.max(Math.floor(x * kx) + 1, Math.floor((x + 1) * kx)); xx++) { const i = (yy * src.width + xx) * 4, al = sd[i + 3] / 255; r += sd[i] * al; g += sd[i + 1] * al; b += sd[i + 2] * al; a += al; n++; }
+    A.set(a ? [r / a, g / a, b / a] : [0, 0, 0], (y * w + x) * 3); COV[y * w + x] = a / n;
   }
   const N = w * h, px = i => [A[i * 3], A[i * 3 + 1], A[i * 3 + 2]], LAB = Array.from({length: N}, (_, i) => toLab(px(i)));
-  // ② 去背：邊框中位色當背景；前景 = ReLU(OKLab 距離 − 門檻) > 0
-  const border = []; for (let x = 0; x < w; x++) border.push(LAB[x], LAB[(h - 1) * w + x]); for (let y = 0; y < h; y++) border.push(LAB[y * w], LAB[y * w + w - 1]);
-  const bg = [0, 1, 2].map(c => median(border.map(p => p[c]))), mask = new Uint8Array(N).fill(1);
-  if ($('ph-bg').checked) for (let i = 0; i < N; i++) mask[i] = relu(dE(LAB[i], bg) - 0.035) > 0 ? 1 : 0;
+  // ② 遮罩：去背工具留下的覆蓋率 ≥ 0.5 才算前景；可選再用邊框中位色去背（ReLU(OKLab 距離 − 門檻) > 0）
+  const mask = new Uint8Array(N); for (let i = 0; i < N; i++) mask[i] = COV[i] >= 0.5 ? 1 : 0;
+  if ($('ph-bg').checked) {
+    const border = []; for (let x = 0; x < w; x++) for (const i of [x, (h - 1) * w + x]) if (mask[i]) border.push(LAB[i]);
+    for (let y = 0; y < h; y++) for (const i of [y * w, y * w + w - 1]) if (mask[i]) border.push(LAB[i]);
+    if (border.length) { const bg = [0, 1, 2].map(c => median(border.map(p => p[c]))); for (let i = 0; i < N; i++) if (mask[i]) mask[i] = relu(dE(LAB[i], bg) - 0.035) > 0 ? 1 : 0; }
+  }
   // ③ 調色盤＋線性量化層（OKLab）
   const fgIdx = []; for (let i = 0; i < N; i++) if (mask[i]) fgIdx.push(i);
   const algo = $('ph-algo').value;
@@ -1755,7 +1890,7 @@ function phPixelize() {
     edge[i] = relu(relu(gx) + relu(-gx) + relu(gy) + relu(-gy) - th) > 0 && relu(nb - Lm(i)) > 0 ? 1 : 0;
   }
   const outer = new Int16Array(N).fill(-1);   // 外框：記住旁邊最多的前景色，供選擇性描邊用
-  if ($('ph-bg').checked) for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = y * w + x; if (fin(i)) continue; const cnt = new Map();
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) { const i = y * w + x; if (fin(i)) continue; const cnt = new Map();
     for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) { const yy = y + dy, xx = x + dx; if (yy >= 0 && xx >= 0 && yy < h && xx < w) { const v = idx3[yy * w + xx]; if (v >= 0) cnt.set(v, (cnt.get(v) || 0) + 1); } }
     let bk = -1, bv = 0; for (const [k, v] of cnt) if (v > bv) { bv = v; bk = k; } outer[i] = bk; }
   const dark = pal.reduce((a, c) => c[0] + c[1] + c[2] < a[0] + a[1] + a[2] ? c : a, [255, 255, 255]).map(v => Math.round(v * 0.6)), so = $('ph-selout').checked;
