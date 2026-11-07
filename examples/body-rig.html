@@ -2198,22 +2198,59 @@ function refinePhotoBody() {
   const T = fk({}, false), one = (v, M) => { const R = render(v, T, false); let I = 0, U = 0;
     for (let i = 0; i < W * H; i++) { const a = R.sid[i] >= 0, t = M[i]; if (a && t) I++; if (a || t) U++; } return I / (U || 1); };
   const iou = () => PHB.MS ? (one('front', PHB.M) + one('side', PHB.MS)) / 2 : one('front', PHB.M);
-  const P = [];
-  for (const sh of SHAPES) {
-    if (sh.face) continue;
-    if (sh.kind === 'ell') { P.push({get: () => sh.r[0], set: v => { sh.r = [Math.max(1, v), sh.r[1], sh.r[2]]; }}, {get: () => sh.C[0], set: v => { sh.C = [v, sh.C[1], sh.C[2]]; }});
-      if (PHB.MS) P.push({get: () => sh.r[2], set: v => { sh.r = [sh.r[0], sh.r[1], Math.max(1, v)]; }}, {get: () => sh.C[2], set: v => { sh.C = [sh.C[0], sh.C[1], v]; }}); }
-    else P.push(sh.underSkirt ? {get: () => 0, set: () => {}} : {get: () => sh.ra, set: v => { const k = Math.max(0.8, v) / sh.ra; sh.ra *= k; sh.rb *= k; }},   // 裙下的大腿粗細固定，不讓微調用它去填裙子
-      {get: () => sh.A[0], set: v => { const d = v - sh.A[0]; sh.A = [sh.A[0] + d, sh.A[1], sh.A[2]]; sh.B = [sh.B[0] + d, sh.B[1], sh.B[2]]; }},
-      ...(PHB.MS ? [{get: () => sh.A[2], set: v => { const d = v - sh.A[2]; sh.A = [sh.A[0], sh.A[1], sh.A[2] + d]; sh.B = [sh.B[0], sh.B[1], sh.B[2] + d]; }}] : []));   // 截面比例不交給微調（裙子的輪廓會把腿撐粗）
+  const isLimb = sh => sh.kind === 'cap' && /^[rl](Hip|Kn|An|Sh|El|Wr)$/.test(JOINTS[sh.bone].k);
+  const shift = (sh, ax) => ({get: () => sh.A[ax], set: v => { const d = v - sh.A[ax]; sh.A = sh.A.map((u, i) => i === ax ? u + d : u); sh.B = sh.B.map((u, i) => i === ax ? u + d : u); }});
+  const radius = sh => { const r0 = sh.r0 ??= sh.ra, lo = r0 * 0.8, hi = r0 * 1.3;   // 手腳粗細只能在量測值的 0.8～1.3 倍間調（避免為了填輪廓把腿撐成方塊）
+    return {get: () => sh.ra, set: v => { const k = Math.min(hi, Math.max(lo, v)) / sh.ra; sh.ra *= k; sh.rb *= k; }}; };
+  const ellP = [];
+  for (const sh of SHAPES) if (sh.kind === 'ell' && !sh.face) {
+    ellP.push({get: () => sh.r[0], set: v => { sh.r = [Math.max(1, v), sh.r[1], sh.r[2]]; }}, {get: () => sh.C[0], set: v => { sh.C = [v, sh.C[1], sh.C[2]]; }});
+    if (PHB.MS) ellP.push({get: () => sh.r[2], set: v => { sh.r = [sh.r[0], sh.r[1], Math.max(1, v)]; }}, {get: () => sh.C[2], set: v => { sh.C = [sh.C[0], sh.C[1], v]; }});
   }
+  const capP = []; for (const sh of SHAPES) if (sh.kind === 'cap' && !sh.face) { if (!sh.foot) capP.push(radius(sh)); capP.push(shift(sh, 0)); if (PHB.MS && !sh.foot) capP.push(shift(sh, 2)); }
   let best = iou(); const before = best;
-  for (const st of [1, 0.5]) for (let round = 0; round < 3; round++) {
+  const descend = (P, steps, rounds) => { for (const st of steps) for (let round = 0; round < rounds; round++) {
     let imp = false;
     for (const q of P) for (const d of [st, -st]) { const o = q.get(); q.set(o + d); const v = iou(); if (v > best + 1e-9) { best = v; imp = true; } else q.set(o); }
-    if (!imp) break;
+    if (!imp) break; } };
+  // 第 1 段：每段手腳各自貼合
+  descend([...ellP, ...capP], [2, 1, 0.5], 5);
+  // 焊接接點，再用「關節點」參數補回：移動膝蓋會同時帶動大腿下端與小腿上端，接點始終焊著；踝點連腳掌一起動
+  snapLimbs(); best = iou();
+  const capOf = k => SHAPES.find(q => q.kind === 'cap' && !q.foot && JOINTS[q.bone].k === k), jointP = [];
+  for (const sd of ['r', 'l']) for (const [segs, endJ] of [[['Hip', 'Kn'], 'An'], [['Sh', 'El', 'Wr'], null]]) {
+    const cs = segs.map(k => capOf(sd + k)).filter(Boolean); if (!cs.length) continue;
+    const pts = [[[cs[0], 'A']]];
+    for (let i = 0; i < cs.length; i++) pts.push(i + 1 < cs.length ? [[cs[i], 'B'], [cs[i + 1], 'A']] : [[cs[i], 'B']]);
+    pts.forEach((grp, gi) => {
+      const feet = endJ && gi === pts.length - 1 ? SHAPES.filter(q => q.foot && JOINTS[q.bone].k === sd + endJ) : [];
+      for (const ax of PHB.MS ? [0, 2] : [0]) { let acc = 0;
+        jointP.push({get: () => acc, set: v => { const d = v - acc; acc = v;
+          for (const [q, e] of grp) q[e] = q[e].map((u, i) => i === ax ? u + d : u);
+          for (const f of feet) { f.A = f.A.map((u, i) => i === ax ? u + d : u); f.B = f.B.map((u, i) => i === ax ? u + d : u); } }}); }
+    });
   }
+  // 第 2 段：關節點＋手腳粗細＋軀幹橢球
+  descend([...jointP, ...SHAPES.filter(q => isLimb(q) && !q.foot).map(radius), ...ellP], [2, 1, 0.5], 5);
   PHB.refine = {before, after: best};
+  snapLimbs();
+}
+// 焊接手腳：大腿下端＝小腿上端＝膝關節轉軸（手肘、手腕、腳踝同理），彎曲時才不會在關節處裂開
+function snapLimbs() {
+  const capOf = k => SHAPES.find(sh => sh.kind === 'cap' && !sh.foot && JOINTS[sh.bone].k === k);
+  for (const sd of ['r', 'l']) for (const [up, lo] of [['Hip', 'Kn'], ['Sh', 'El'], ['El', 'Wr']]) {
+    const a = capOf(sd + up), b = capOf(sd + lo); if (!a || !b) continue;
+    const j = [(a.B[0] + b.A[0]) / 2, (a.B[1] + b.A[1]) / 2, (a.B[2] + b.A[2]) / 2];
+    a.B = j; b.A = [...j]; JOINTS[IDX[sd + lo]].P = [...j];
+  }
+  for (const sd of ['r', 'l']) {   // 腳踝：轉軸放在小腿下端；腳掌以它為準重新擺：腳跟在後 1/4、腳尖在前 3/4
+    const sh = capOf(sd + 'Kn'); if (!sh) continue; const an = [...sh.B]; JOINTS[IDX[sd + 'An']].P = an;
+    for (const f of SHAPES.filter(q => q.foot && JOINTS[q.bone].k === sd + 'An')) {
+      const L = Math.max(5, f.B[2] - f.A[2]), dx = f.A[0] - (f.A[0] + f.B[0]) / 2;
+      f.A = [an[0] + dx, f.A[1], an[2] - L * 0.25]; f.B = [an[0] + dx, f.B[1], an[2] + L * 0.75];
+    }
+  }
+  REST.P = JOINTS.map(j => j.P);
 }
 // ---------- 多視角：用側面圖量厚度（z）與前後位置，側面也有自己的貼圖 ----------
 function photoSideDepth(SD) {
@@ -2240,8 +2277,11 @@ function photoSideDepth(SD) {
       const run = runZ(y, zg); if (!run) continue;
       sh.C = [sh.C[0], sh.C[1], (run[0] + run[1]) / 2]; sh.r = [sh.r[0], sh.r[1], Math.max(1, (run[1] - run[0] + 1) / 2)];
     } else if (sh.foot) {   // 鞋：腳底那一列從後跟到腳尖
-      const y = Math.min(H - 1, (sh.A[1] + sh.B[1]) / 2 + sh.ra * 0.5), run = runZ(y, zs('an'));
-      if (run) { sh.A = [sh.A[0], sh.A[1], run[0] + sh.ra]; sh.B = [sh.B[0], sh.B[1], Math.max(run[0] + sh.ra, run[1] - sh.rb)]; }
+      // 腳掌一定從腳踝稍後方（腳跟）往前到腳尖；量到的那段沒包住腳踝（抓到另一隻腳）就用預設長度
+      const za = zs('an'), y = Math.min(H - 1, (sh.A[1] + sh.B[1]) / 2 + sh.ra * 0.5), run = runZ(y, za);
+      const ok = run && run[0] <= za + 1 && run[1] >= za + 2;
+      const heel = ok ? Math.max(za - 3, run[0] + sh.ra) : za - 1.5, toe = ok ? Math.max(za + 3, run[1] - sh.rb) : za + 6;
+      sh.A = [sh.A[0], sh.A[1], heel]; sh.B = [sh.B[0], sh.B[1], toe];
     } else {
       const m = /^[rl](Sh|El|Wr|Hip|Kn)$/.exec(JOINTS[sh.bone].k); if (!m) continue;
       const [a, b] = limb[m[1]], za = y => lineZ(a, b, y);
