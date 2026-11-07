@@ -1,0 +1,291 @@
+<title>像素骨架實驗台</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen&family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* 版面：左邊是像素畫布（主角），右邊是控制台；手機寬度時改成上下排 */
+:root {
+  --bg: #eef1f6;
+  --panel: #ffffff;
+  --ink: #1d2433;
+  --muted: #5b6577;
+  --line: #d3d9e4;
+  --accent: #d9653b;
+  --accent-ink: #ffffff;
+  --stage: #26304a;
+  --stage-grid: #2f3a57;
+  --f-display: "Silkscreen", "Courier New", monospace;
+  --f-body: "Noto Sans TC", system-ui, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #141a26; --panel: #1c2433; --ink: #e6eaf2; --muted: #9aa5b8; --line: #2e3a50;
+  --accent: #f0875c; --accent-ink: #1a1208; --stage: #0e1320; --stage-grid: #182036; color-scheme: dark; } }
+:root[data-theme="dark"] {
+  --bg: #141a26; --panel: #1c2433; --ink: #e6eaf2; --muted: #9aa5b8; --line: #2e3a50;
+  --accent: #f0875c; --accent-ink: #1a1208; --stage: #0e1320; --stage-grid: #182036; color-scheme: dark; }
+
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--f-body); line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 24px 48px; }
+.wrap { max-width: 1080px; margin: 0 auto; display: grid; gap: 20px; }
+header h1 { font-family: var(--f-display); font-weight: 400; font-size: clamp(22px, 4vw, 34px); margin: 0; letter-spacing: .02em; text-wrap: balance; }
+header p { margin: 4px 0 0; color: var(--muted); max-width: 65ch; }
+.main { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+@media (max-width: 760px) { .main { grid-template-columns: 1fr; } }
+.stage { background: var(--stage); border-radius: 6px; padding: 12px; display: grid; gap: 10px; }
+canvas { width: 100%; height: auto; aspect-ratio: 1; image-rendering: pixelated; display: block; max-width: 100%; }
+.modes { display: flex; flex-wrap: wrap; gap: 6px; }
+.modes button { font: 500 13px var(--f-body); border: 1px solid var(--stage-grid); background: transparent; color: #c9d2e4; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
+.modes button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.legend { display: flex; align-items: center; gap: 8px; font: 12px var(--f-mono); color: #c9d2e4; }
+.legend .bar { flex: 1; height: 8px; border-radius: 2px; background: linear-gradient(90deg, #2b3a67, #3f7f9a, #6cc08b, #f2d35b, #f0875c); }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 16px; display: grid; gap: 16px; min-width: 0; }
+.panel h2 { font: 700 13px var(--f-body); letter-spacing: .08em; color: var(--muted); margin: 0; }
+.joint { display: grid; grid-template-columns: 4.5em minmax(0, 1fr) 4.2em; gap: 10px; align-items: center; }
+.joint label { font-weight: 500; }
+.joint output { font: 13px var(--f-mono); text-align: right; font-variant-numeric: tabular-nums; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+.toggles { display: grid; gap: 8px; }
+.toggles label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+input[type=checkbox] { accent-color: var(--accent); width: 16px; height: 16px; }
+table { width: 100%; border-collapse: collapse; font: 13px var(--f-mono); font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 4px 0; border-bottom: 1px solid var(--line); }
+th { font: 500 12px var(--f-body); color: var(--muted); }
+td.n { text-align: right; }
+.dbar { height: 6px; background: var(--accent); border-radius: 2px; }
+.note { font-size: 13px; color: var(--muted); margin: 0; }
+.pipe { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.pipe div { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px; font-size: 13px; min-width: 0; }
+.pipe b { display: block; font: 600 12px var(--f-mono); color: var(--accent); }
+button.reset { justify-self: start; font: 500 13px var(--f-body); background: transparent; color: var(--ink); border: 1px solid var(--line); border-radius: 4px; padding: 6px 12px; cursor: pointer; }
+button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>像素骨架實驗台</h1>
+    <p>拖動關節，看每個像素的位移：同一個角度下，離肩膀越遠的像素移動越多。整條計算只用乘、加、ReLU（handwired 的寫法）。</p>
+  </header>
+
+  <div class="main">
+    <section class="stage" aria-label="像素畫布">
+      <div class="modes" role="group" aria-label="顯示模式">
+        <button id="m-color" aria-pressed="true" data-mode="color">原色</button>
+        <button id="m-heat" aria-pressed="false" data-mode="heat">位移熱圖</button>
+        <button id="m-weight" aria-pressed="false" data-mode="weight">骨頭權重</button>
+      </div>
+      <canvas id="cv" width="384" height="384"></canvas>
+      <div class="legend" id="legend" hidden><span>0 px</span><span class="bar"></span><span id="lmax">12 px</span></div>
+    </section>
+
+    <section class="panel" aria-label="控制台">
+      <h2>關節角度（L3 前向運動學）</h2>
+      <div class="joint"><label for="j1">肩</label><input id="j1" type="range" min="-120" max="120" value="30"><output id="o1"></output></div>
+      <div class="joint"><label for="j2">肘</label><input id="j2" type="range" min="0" max="140" value="25"><output id="o2"></output></div>
+      <div class="joint"><label for="j3">腕</label><input id="j3" type="range" min="-60" max="60" value="15"><output id="o3"></output></div>
+
+      <div class="toggles">
+        <label><input id="cpg" type="checkbox">神經節律驅動（L0 CPG，含傳導延遲）</label>
+        <label><input id="soft" type="checkbox" checked>柔性蒙皮（L4：關節附近混合兩根骨頭）</label>
+        <label><input id="bones" type="checkbox" checked>顯示骨頭</label>
+      </div>
+
+      <h2>各部位最大位移</h2>
+      <table>
+        <thead><tr><th>部位</th><th class="n">位移</th><th style="width:40%"></th></tr></thead>
+        <tbody id="disp"></tbody>
+      </table>
+      <p class="note">以靜止姿勢（手臂水平）為基準。關節同向彎曲時，越末端位移越大；若肘部反折，手會被拉回來，位移反而變小。</p>
+      <button class="reset" id="reset">回到預設姿勢</button>
+    </section>
+  </div>
+
+  <div class="pipe">
+    <div><b>L0 神經節律</b>Matsuoka 振盪器，輸出本身就是 max(0, x)</div>
+    <div><b>L2 關節限位</b>角度以 ReLU 夾在活動範圍內</div>
+    <div><b>L3 骨架</b>T子 = T父 · R(θ)，矩陣連乘</div>
+    <div><b>L4 蒙皮</b>p' = Σ wᵢ Tᵢ p，w 用 ReLU 斜坡</div>
+    <div><b>L5 像素化</b>每像素 3×3 子取樣再取整，避免破洞</div>
+  </div>
+</div>
+
+<script>
+const relu = x => Math.max(0, x);
+const clamp01 = x => relu(x) - relu(x - 1);
+const clampR = (x, lo, hi) => lo + relu(x - lo) - relu(x - hi);   // L2 關節限位
+const G = 48, cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const S = cv.width / G;
+
+// ---------- 靜止姿勢 sprite（程式產生，手臂水平向右） ----------
+const PAL = {k: '#1b1f2a', s: '#f1b98c', S: '#c98a62', h: '#5a3b2e', t: '#3f7fbf', T: '#2d5f94', p: '#3b3f58', b: '#7a4a2c', w: '#ffffff'};
+const SH = [20, 22];                       // 肩膀樞紐
+const LEN = [9, 7, 5];                     // 上臂、前臂、手（約依 Winter 比例 0.186 : 0.146 : 0.108）
+const JX = [SH[0], SH[0] + LEN[0], SH[0] + LEN[0] + LEN[1], SH[0] + LEN[0] + LEN[1] + LEN[2]];
+const px = [];                             // {x, y, c, part}  part: 0 身體, 1 上臂, 2 前臂, 3 手
+const put = (x, y, c, part) => px.push({x, y, c, part});
+function rect(x0, y0, w, h, c, part, edge) {
+  for (let y = y0; y < y0 + h; y++) for (let x = x0; x < x0 + w; x++) {
+    const border = edge && (x === x0 || x === x0 + w - 1 || y === y0 || y === y0 + h - 1);
+    put(x, y, border ? edge : c, part);
+  }
+}
+// 身體
+rect(14, 8, 10, 10, 's', 0, 'k');          // 頭
+rect(13, 6, 12, 4, 'h', 0);                // 頭髮
+put(20, 12, 'k', 0); put(21, 12, 'k', 0);  // 眼睛
+rect(13, 18, 12, 14, 't', 0, 'k');         // 上衣
+rect(14, 32, 4, 10, 'p', 0, 'k');          // 左腿
+rect(20, 32, 4, 10, 'p', 0, 'k');
+rect(13, 42, 5, 2, 'b', 0); rect(20, 42, 5, 2, 'b', 0);
+// 手臂（畫在身體前面）
+rect(JX[0] - 1, SH[1] - 1, LEN[0] + 1, 4, 'T', 1, 'k');
+rect(JX[1], SH[1] - 1, LEN[1], 3, 's', 2, 'k');
+rect(JX[2], SH[1] - 1, LEN[2], 3, 'S', 3, 'k');
+put(JX[3] - 1, SH[1] + 2, 'S', 3);         // 拇指
+
+// ---------- L4 蒙皮權重：沿手臂座標 u，在關節兩側 ±R 內線性混合（ReLU 斜坡） ----------
+const R = 2;
+function weights(p, soft) {
+  if (p.part === 0) return [1, 0, 0, 0];
+  const u = p.x + 0.5;
+  const w = [0, 0, 0, 0];
+  // 每段：從上一個關節之後開始、到下一個關節之前結束
+  for (let i = 1; i <= 3; i++) {
+    const a = soft ? clamp01((u - JX[i - 1] + R) / (2 * R)) : (u >= JX[i - 1] ? 1 : 0);
+    const b = i < 3 ? (soft ? clamp01((u - JX[i] + R) / (2 * R)) : (u >= JX[i] ? 1 : 0)) : 0;
+    w[i] = relu(a - b);
+  }
+  if (p.part === 1) { const sum = w[1] + w[2] + w[3]; if (sum === 0) w[1] = 1; }
+  const sum = w.reduce((s, v) => s + v, 0); return w.map(v => v / sum);
+}
+
+// ---------- L3 前向運動學：仿射矩陣 [a b c; d e f] ----------
+const mul = (A, B) => [A[0]*B[0]+A[1]*B[3], A[0]*B[1]+A[1]*B[4], A[0]*B[2]+A[1]*B[5]+A[2],
+                       A[3]*B[0]+A[4]*B[3], A[3]*B[1]+A[4]*B[4], A[3]*B[2]+A[4]*B[5]+A[5]];
+const rotAbout = (th, cx, cy) => { const c = Math.cos(th), s = Math.sin(th);
+  return [c, -s, cx - c*cx + s*cy, s, c, cy - s*cx - c*cy]; };
+const apply = (M, x, y) => [M[0]*x + M[1]*y + M[2], M[3]*x + M[4]*y + M[5]];
+function bonesFor(th) {
+  const T1 = rotAbout(th[0], JX[0], SH[1] + 0.5);
+  const T2 = mul(T1, rotAbout(th[1], JX[1], SH[1] + 0.5));
+  const T3 = mul(T2, rotAbout(th[2], JX[2], SH[1] + 0.5));
+  return [[1, 0, 0, 0, 1, 0], T1, T2, T3];
+}
+
+// ---------- 狀態 ----------
+const state = {mode: 'color', th: [0, 0, 0], maxD: [0, 0, 0]};
+const LIMITS = [[-120, 120], [0, 140], [-60, 60]].map(r => r.map(d => d * Math.PI / 180));
+const sl = [1, 2, 3].map(i => document.getElementById('j' + i));
+const out = [1, 2, 3].map(i => document.getElementById('o' + i));
+const softEl = document.getElementById('soft'), bonesEl = document.getElementById('bones'), cpgEl = document.getElementById('cpg');
+
+// ---------- L5 渲染：每個像素 3×3 子取樣，前向推送後取整 ----------
+function heat(t) {
+  const stops = [[43,58,103],[63,127,154],[108,192,139],[242,211,91],[240,135,92]];
+  t = clamp01(t) * (stops.length - 1); const i = Math.min(stops.length - 2, Math.floor(t)), f = t - i;
+  return `rgb(${stops[i].map((v, k) => Math.round(v + (stops[i+1][k] - v) * f)).join(',')})`;
+}
+const WCOL = ['#8a93a8', '#3f7fbf', '#6cc08b', '#f0875c'];
+function mixW(w) {
+  let r = 0, g = 0, b = 0;
+  w.forEach((v, i) => { const h = WCOL[i]; r += v * parseInt(h.slice(1,3),16); g += v * parseInt(h.slice(3,5),16); b += v * parseInt(h.slice(5,7),16); });
+  return `rgb(${r|0},${g|0},${b|0})`;
+}
+const HMAX = 14;
+function draw() {
+  const css = getComputedStyle(document.documentElement);
+  ctx.fillStyle = css.getPropertyValue('--stage').trim(); ctx.fillRect(0, 0, cv.width, cv.height);
+  ctx.fillStyle = css.getPropertyValue('--stage-grid').trim();
+  for (let i = 0; i <= G; i += 4) { ctx.fillRect(i * S, 0, 1, cv.height); ctx.fillRect(0, i * S, cv.width, 1); }
+  const B = bonesFor(state.th), soft = softEl.checked;
+  const grid = new Map();
+  const partMax = [0, 0, 0, 0];
+  // 身體先畫，手臂後畫，手臂蓋在上面
+  for (const pass of [0, 1]) for (const p of px) {
+    if ((p.part === 0) !== (pass === 0)) continue;
+    const w = weights(p, soft);
+    let dsum = 0;
+    for (const oy of [0.17, 0.5, 0.83]) for (const ox of [0.17, 0.5, 0.83]) {
+      let X = 0, Y = 0;
+      for (let i = 0; i < 4; i++) if (w[i]) { const [a, b] = apply(B[i], p.x + ox, p.y + oy); X += w[i] * a; Y += w[i] * b; }
+      const d = Math.hypot(X - p.x - ox, Y - p.y - oy); dsum += d;
+      const gx = Math.floor(X), gy = Math.floor(Y);
+      if (gx >= 0 && gy >= 0 && gx < G && gy < G) grid.set(gy * G + gx, {p, w, d});
+    }
+    partMax[p.part] = Math.max(partMax[p.part], dsum / 9);
+  }
+  for (const [k, v] of grid) {
+    const x = k % G, y = (k / G) | 0;
+    ctx.fillStyle = state.mode === 'color' ? PAL[v.p.c] : state.mode === 'heat' ? heat(v.d / HMAX) : mixW(v.w);
+    ctx.fillRect(x * S, y * S, S, S);
+  }
+  if (bonesEl.checked) {
+    ctx.strokeStyle = '#ffffffcc'; ctx.lineWidth = 2; ctx.fillStyle = '#ffffff';
+    let pts = [[JX[0], SH[1] + 0.5]];
+    for (let i = 1; i <= 3; i++) pts.push(apply(B[i], JX[i], SH[1] + 0.5));
+    ctx.beginPath(); pts.forEach(([x, y], i) => i ? ctx.lineTo(x * S, y * S) : ctx.moveTo(x * S, y * S)); ctx.stroke();
+    pts.forEach(([x, y]) => { ctx.beginPath(); ctx.arc(x * S, y * S, 4, 0, 7); ctx.fill(); });
+  }
+  // 位移表（以各部位像素的平均位移最大值計）
+  for (let i = 0; i < 3; i++) state.maxD[i] = partMax[i + 1];
+  const names = ['上臂', '前臂', '手'];
+  const top = Math.max(1, ...state.maxD);
+  document.getElementById('disp').innerHTML = names.map((n, i) =>
+    `<tr><td>${n}</td><td class="n">${state.maxD[i].toFixed(1)} px</td><td><div class="dbar" style="width:${(state.maxD[i] / top * 100).toFixed(0)}%"></div></td></tr>`).join('');
+}
+
+function setFromSliders() {
+  state.th = sl.map((s, i) => clampR(+s.value * Math.PI / 180, ...LIMITS[i]));
+  sl.forEach((s, i) => out[i].textContent = `${(+s.value).toFixed(0)}°`);
+  draw();
+}
+
+// ---------- L0：Matsuoka CPG + 傳導延遲 → L1 增益 → L2 彈簧阻尼 + ReLU 限位 ----------
+const cpg = {x1: 0.1, x2: 0, v1: 0, v2: 0}, hist = [];
+const J = [{g: 1.6, bias: -0.4, delay: 0}, {g: 1.4, bias: 1.0, delay: 8}, {g: 0.8, bias: 0, delay: 16}].map(j => ({...j, th: 0, om: 0}));
+function stepSim(dt) {
+  const y1 = relu(cpg.x1), y2 = relu(cpg.x2), tau = 0.12, T = 0.25;
+  cpg.x1 += dt / tau * (-cpg.x1 - 2.5 * cpg.v1 - 2 * y2 + 1);
+  cpg.x2 += dt / tau * (-cpg.x2 - 2.5 * cpg.v2 - 2 * y1 + 1);
+  cpg.v1 += dt / T * (-cpg.v1 + y1); cpg.v2 += dt / T * (-cpg.v2 + y2);
+  hist.push(y1 - y2); if (hist.length > 64) hist.shift();
+  J.forEach((j, i) => {
+    const u = hist[Math.max(0, hist.length - 1 - j.delay)];
+    const target = j.bias + j.g * u, K = 60, C = 2 * Math.sqrt(K);
+    j.om += (K * (target - j.th) - C * j.om - 400 * relu(j.th - LIMITS[i][1]) + 400 * relu(LIMITS[i][0] - j.th)) * dt;
+    j.th += j.om * dt;
+  });
+}
+let raf = 0;
+function loop() {
+  for (let k = 0; k < 2; k++) stepSim(1 / 120);
+  state.th = J.map(j => j.th);
+  sl.forEach((s, i) => { s.value = Math.round(J[i].th * 180 / Math.PI); out[i].textContent = `${s.value}°`; });
+  draw();
+  raf = requestAnimationFrame(loop);
+}
+cpgEl.addEventListener('change', () => {
+  cancelAnimationFrame(raf);
+  if (cpgEl.checked) { J.forEach((j, i) => { j.th = state.th[i]; j.om = 0; }); loop(); }
+  sl.forEach(s => s.disabled = cpgEl.checked);
+});
+if (matchMedia('(prefers-reduced-motion: reduce)').matches) cpgEl.closest('label').title = '已偵測到減少動態偏好；勾選後才會播放';
+
+// ---------- 事件 ----------
+sl.forEach(s => s.addEventListener('input', setFromSliders));
+[softEl, bonesEl].forEach(e => e.addEventListener('change', draw));
+document.querySelectorAll('.modes button').forEach(b => b.addEventListener('click', () => {
+  state.mode = b.dataset.mode;
+  document.querySelectorAll('.modes button').forEach(x => x.setAttribute('aria-pressed', x === b));
+  document.getElementById('legend').hidden = state.mode !== 'heat';
+  document.getElementById('lmax').textContent = `${HMAX} px`;
+  draw();
+}));
+document.getElementById('reset').addEventListener('click', () => {
+  if (cpgEl.checked) { cpgEl.checked = false; cpgEl.dispatchEvent(new Event('change')); }
+  [30, 25, 15].forEach((v, i) => sl[i].value = v); setFromSliders();
+});
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw);
+setFromSliders();
+</script>
