@@ -123,6 +123,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); ou
       <label>重力 <input id="p-g" type="range" min="0" max="1200" value="600" style="width:80px"></label>
       <label>阻尼 <input id="p-d" type="range" min="0" max="30" value="6" style="width:80px"></label>
       <label>硬度 <input id="p-k" type="range" min="1" max="8" value="4" style="width:80px"></label>
+      <label title="布料被拉回原本形狀的強度">形狀回復 <input id="p-s" type="range" min="0" max="30" value="8" style="width:80px"></label>
     </div>
     <div class="legend" id="legend" hidden><span>0</span><i></i><span>40 px</span></div>
   </div>
@@ -511,14 +512,16 @@ function physInit() {
   }
   for (let i = 0; i < N; i++) for (let k = 1; k <= 3; k++) { const a = rows[i][k], b = rows[(i + 1) % N][k]; link(a, b); wcap(a, b, 2.1, 2.1, 'skirt', 'pelvis'); }
   P.chains.push({kind: 'skirt', rows});
-  P.fresh = true;
+  P.fresh = true; P.owner = 'anime';
 }
 function physColliders(T) {   // 碰撞體（世界座標）：頭、胸、骨盆用球，大腿用膠囊
   const w = (b, X) => toWorld(T, IDX[b], X);
   return {
     hair: [{c: w('head', [40.5, 20, 0.6]), r: 10.6}, {c: w('chest', [40.5, 47, 0]), r: 9.5}, {c: w('rSh', J('rSh')), r: 4}, {c: w('lSh', J('lSh')), r: 4}],
-    skirt: [{c: w('pelvis', [40.5, 71, 0]), r: 8.2}],
-    caps: ['rHip', 'lHip'].map(k => ({a: T.P[IDX[k]], b: T.P[IDX[k.replace('Hip', 'Kn')]], r: 6.4})),
+    skirt: BODY === 'anime' ? [{c: w('pelvis', [40.5, 71, 0]), r: 8.2}] : [],
+    // 腿（大腿＋小腿）：直接用目前體型的膠囊，半徑再加 0.8 px 當布料厚度；蹲下時裙子才會被大腿頂開、攤在腿上
+    caps: SHAPES.filter(sh => sh.kind === 'cap' && !sh.world && !sh.foot && /^[rl](Hip|Kn)$/.test(JOINTS[sh.bone].k))
+      .map(sh => ({a: toWorld(T, sh.bone, sh.A), b: toWorld(T, sh.bone, sh.B), r: Math.max(sh.ra, sh.rb) * Math.max(1, sh.kz || 1) + 0.8, rc: (sh.ra + sh.rb) / 2, bone: sh.bone})),
   };
 }
 function physStep(T, dt, opt) {
@@ -526,7 +529,11 @@ function physStep(T, dt, opt) {
   for (const p of P.parts) {
     if (p.pin) { p.o = p.x; p.x = toWorld(T, IDX[p.pin.bone], p.pin.X); continue; }
     const v = sub(p.x, p.o); p.o = p.x;
-    p.x = [p.x[0] + v[0] * (1 - damp), p.x[1] + v[1] * (1 - damp) + g * dt * dt, p.x[2] + v[2] * (1 - damp)];
+    const dm = p.home ? Math.max(damp, 0.2) : damp;   // 照片布料多一點阻尼，避免碰撞造成的細微抖動
+    p.x = [p.x[0] + v[0] * (1 - dm), p.x[1] + v[1] * (1 - dm) + g * dt * dt, p.x[2] + v[2] * (1 - dm)];
+    // 形狀回復：拉回「相對骨盆的靜止位置」（照片裡的裙形），x += k·(目標 − x)
+    // 依時間換算：opt.shape 是「每 1/60 秒拉回的比例」，切幾小步都一樣強
+    if (p.home) { const tg = clothTarget(T, p), k = 1 - Math.pow(1 - opt.shape, dt * 60); p.x = p.x.map((u, c) => u + (tg[c] - u) * k); p.tg = tg; }
   }
   const hairSet = new Set(P.chains.filter(c => c.kind === 'hair').flatMap(c => c.ids));
   for (let it = 0; it < iters; it++) {
@@ -541,16 +548,69 @@ function physStep(T, dt, opt) {
       if (hairSet.has(i)) col.hair.forEach(o => push(o.c, o.r + 1.5));
       else {
         col.skirt.forEach(o => push(o.c, o.r));
-        for (const cp of col.caps) {   // 最近點投影到大腿線段，再推出半徑之外
-          const ab = sub(cp.b, cp.a), h = Math.min(1, relu(sub(p.x, cp.a).reduce((s, v, k) => s + v * ab[k], 0) / ab.reduce((s, v) => s + v * v, 0)));
-          push(add(cp.a, ab.map(v => v * h)), cp.r);
-        }
+        col.caps.forEach(cp => {   // 最近點投影到腿的線段，再推出半徑之外（照片布料：大腿根部 20% 不算，原本就和裙頭重疊）
+          const ab = sub(cp.b, cp.a), L2 = ab.reduce((s, v) => s + v * v, 0), h = Math.min(1, Math.max(p.home ? 0.2 : 0, sub(p.x, cp.a).reduce((s, v, k) => s + v * ab[k], 0) / L2));
+          push(add(cp.a, ab.map(v => v * h)), p.home ? cp.rc : cp.r);
+        });
+        p.x[1] -= relu(p.x[1] - (GROUND - 0.5));   // 地面：不穿到地板下
       }
     });
   }
-  for (const s of P.shapes) { s.A = P.parts[s.pa].x; s.B = P.parts[s.pb].x; }
+  for (const p of P.parts) if (p.tg) p.dev = Math.hypot(...sub(p.x, p.tg));   // 離目標形狀多遠
+  for (const s of P.shapes) {
+    if (s.ring) {   // 切片：中心 = 一圈質點的平均，左右／前後半徑 = 質點離中心的最大距離（高度不變）
+      const X = s.ring.map(i => P.parts[i].x), c = [0, 1, 2].map(k => X.reduce((a, v) => a + v[k], 0) / X.length);
+      s.C = c; s.r = [Math.max(1, ...X.map(v => Math.abs(v[0] - c[0]))), s.Rr[1], Math.max(1, ...X.map(v => Math.abs(v[2] - c[2])))];
+    } else { s.A = P.parts[s.pa].x; s.B = P.parts[s.pb].x; }
+  }
 }
-const physOpt = () => ({g: +$('p-g').value, damp: +$('p-d').value / 100, iters: +$('p-k').value});
+// 布料質點的目標：骨盆與左右大腿的線性混合蒙皮（每根骨頭各自把靜止位置帶到目前位置，再依權重相加）
+function clothTarget(T, q) {
+  if (!q.lbs) return toWorld(T, IDX.pelvis, q.home);
+  const out = [0, 0, 0]; for (const [b, w] of q.lbs) { if (!w) continue; const x = toWorld(T, b, q.home); out[0] += x[0] * w; out[1] += x[1] * w; out[2] += x[2] * w; }
+  return out;
+}
+// 姿勢變化大時（切換預設姿勢、匯出相鄰兩格），物理在兩個姿勢之間切成小步（每步最多 5°）：
+// 腿是「掃過去」而不是瞬間跳到裙子另一側，裙子前片才會被頂起來、蓋在大腿上
+function physAdvance(pose, dt) {
+  const prev = PHYS.prevPose || pose, diff = Math.max(0, ...DOFS.map(d => Math.abs((pose[d.id] ?? 0) - (prev[d.id] ?? 0))));
+  const S = Math.max(2, Math.min(40, Math.ceil(diff / 5))); let T;
+  for (let k = 1; k <= S; k++) {
+    const t = k / S, P = Object.fromEntries(DOFS.map(d => [d.id, (prev[d.id] ?? 0) + ((pose[d.id] ?? 0) - (prev[d.id] ?? 0)) * t]));
+    T = fk(P, $('t-ground').checked); physStep(T, dt / S, physOpt());
+  }
+  PHYS.prevPose = {...pose}; return T;
+}
+const physOpt = () => ({g: +$('p-g').value, damp: +$('p-d').value / 100, iters: +$('p-k').value, shape: +$('p-s').value / 100});
+// 照片體型的裙子 → 布料：每片裙子切片配一圈 N 個質點（最上一圈固定在骨盆）。
+// 外觀仍是原本的實心切片，只是每片的中心與半徑改由它那一圈質點決定 → 站著時和照片一樣，蹲下時被腿推開
+function physInitPhotoCloth(sk) {
+  const P = PHYS, N = 32;   // 每圈 32 個質點：間距要小於腿的半徑，腿才不會從縫隙鑽出去 P.chains = []; P.links = []; P.parts = []; P.shapes = [];
+  const part = (x, pin) => { P.parts.push({x: [...x], o: [...x], r: [...x], home: pin ? null : [...x], pin}); return P.parts.length - 1; };
+  const link = (a, b) => P.links.push({a, b, L: Math.hypot(...sub(P.parts[a].x, P.parts[b].x))});
+  const ids = sk.map((e, k) => Array.from({length: N}, (_, i) => { const t = i / N * 2 * Math.PI, X = [e.C[0] + e.r[0] * Math.cos(t), e.C[1], e.C[2] + e.r[2] * Math.sin(t)];
+    return part(X, k === 0 ? {bone: 'pelvis', X} : null); }));
+  for (let k = 0; k < sk.length; k++) {
+    for (let i = 0; i < N; i++) {
+      const a = ids[k][i]; link(a, ids[k][(i + 1) % N]); link(a, ids[k][(i + 2) % N]);   // 橫向、隔一格（抗彎）
+      if (k + 1 < sk.length) link(a, ids[k + 1][i]); if (k + 3 < sk.length) link(a, ids[k + 3][i]);   // 直向、隔三片（抗彎，不會軟塌）
+    }
+    const e = sk[k]; e.world = true; e.ring = ids[k]; e.RC = [...e.C]; e.Rr = [...e.r]; P.shapes.push(e);
+  }
+  // 布料表面：沿質點連成的細膠囊網。站著時落在切片邊緣；蹲下時跟著質點蓋到大腿上（切片只能變大，不能傾斜）
+  const wcap = (a, b, r, mat) => { const s = {kind: 'cap', world: true, cloth: true, bone: IDX.pelvis, A: [...P.parts[a].x], B: [...P.parts[b].x], ra: r, rb: r, mat, pa: a, pb: b, RA: P.parts[a].r, RB: P.parts[b].r}; SHAPES.push(s); P.shapes.push(s); };
+  for (let k = 1; k < sk.length; k++) for (let i = 0; i < N; i++) { if (i % 2 === 0) wcap(ids[k - 1][i], ids[k][i], 0.9, sk[k].mat); if ((k % 2 === 0 || k === sk.length - 1) && i % 2 === 0) wcap(ids[k][i], ids[k][(i + 2) % N], 0.8, sk[k].mat); }
+  // 蒙皮權重：越靠下（t）、越靠前（ff）、越靠近哪條腿（左右 s），就越跟著那條大腿動；其餘跟骨盆
+  const y0 = sk[0].C[1], y1 = sk[sk.length - 1].C[1];
+  sk.forEach((e, k) => ids[k].forEach((id, i) => {
+    const q = P.parts[id]; if (q.pin) return;
+    const t = (e.C[1] - y0) / ((y1 - y0) || 1), sx = Math.cos(i / N * 2 * Math.PI), sz = Math.sin(i / N * 2 * Math.PI);
+    const ff = 0.5 + 0.5 * sz, wl = Math.min(0.9, Math.pow(t, 1.2) * (0.3 + 0.7 * ff)), wr = Math.min(1, Math.max(0, 0.5 - 0.8 * sx));
+    q.lbs = [[IDX.pelvis, 1 - wl], [IDX.rHip, wl * wr], [IDX.lHip, wl * (1 - wr)]];
+  }));
+  P.chains.push({kind: 'cloth', rows: ids}); P.owner = 'photo'; P.fresh = true;
+}
+
 function physPrep(T) {
   // 物理關閉、剛建好或姿勢被滑桿／預設姿勢直接改掉時：用大阻尼多算幾步，直接停在靜止狀態
   if (PHYS.fresh || !$('t-phys').checked) {
@@ -559,7 +619,7 @@ function physPrep(T) {
       for (const p of PHYS.parts) if (!p.pin) { p.x = add(p.r, d0); p.o = p.x; }   // 從靜止位置重來，不沿用上一次的模擬
     }
     for (let k = 0; k < 80; k++) physStep(T, 1 / 60, {...physOpt(), g: physOpt().g || 600, damp: 0.5});
-    PHYS.fresh = false;
+    PHYS.fresh = false; PHYS.prevPose = {...state.pose};
   }
 }
 // ---------- L6：軟組織（胸、肚子、臀、大腿、臉頰）：附在骨頭上的彈簧阻尼，由骨頭加速度驅動 ----------
@@ -592,10 +652,7 @@ const softActive = () => Object.values(SOFT).some(st => Math.hypot(...st.d) > 0.
 function physLoop(ts) {
   const dt = Math.min(1 / 30, (ts - (PHYS.last || ts)) / 1000 || 1 / 60);
   let need = false, T = null;
-  if (BODY === 'anime' && $('t-phys').checked) {
-    T = fk(state.pose, $('t-ground').checked);
-    physStep(T, dt / 2, physOpt()); physStep(T, dt / 2, physOpt()); need = true;
-  }
+  if (PHYS.parts.length && PHYS.owner === BODY && $('t-phys').checked) { T = physAdvance(state.pose, dt); need = true; }
   if ($('t-soft').checked && SHAPES.some(s => s.soft)) {
     T ??= fk(state.pose, $('t-ground').checked); softStep(T, dt); need = need || softActive() || PHYS.softWas;
     PHYS.softWas = softActive();
@@ -627,7 +684,7 @@ function spineRebind() {
 }
 let BODY = 'real';
 function buildBody(kind) {
-  BODY = kind; SHAPES.length = 0; softReset();
+  BODY = kind; SHAPES.length = 0; softReset(); PHYS.parts = []; PHYS.links = []; PHYS.shapes = []; PHYS.chains = []; PHYS.owner = null;
   ({lpc: buildLPC, anime: buildAnime, real: buildReal, photo: buildPhotoBody})[kind]();
   spineRebind();
   SHAPES.forEach((s, i) => s.id = i); softReset();
@@ -650,9 +707,10 @@ function render(view, T, full = true) {
     if (s.kind === 'cap') {
       let Aw = shapeW(T, s, s.A), Bw = shapeW(T, s, s.B);
       const sf = softOf(s); if (sf) { Aw = add(Aw, sf.d.map(v => v * s.sA)); Bw = add(Bw, sf.d.map(v => v * s.sB)); }   // 軟組織：大腿只有靠髖的一端跟著晃
+      if (s.cloth && !((PHYS.parts[s.pa].dev || 0) > 1 || (PHYS.parts[s.pb].dev || 0) > 1)) continue;   // 布料表面：只在明顯偏離原形時才畫，站著時只畫實心切片
       const kz = view === 'side' && s.kz ? s.kz : 1;   // 橢圓截面：側面看到的粗細 = 正面粗細 × kz（照片體型用側面圖量）
       const a = V.proj(Aw), b = V.proj(Bw), da = V.depth(Aw), db = V.depth(Bw), r = Math.max(s.ra, s.rb) * Math.max(1, kz);
-      const a0 = V.proj(s.A), b0 = V.proj(s.B);
+      const RA = s.RA || s.A, RB = s.RB || s.B, a0 = V.proj(RA), b0 = V.proj(RB);   // 布料：用質點的靜止位置，貼圖才會跟著布料移動
       const bx = b[0] - a[0], by = b[1] - a[1], L2 = bx*bx + by*by, L = Math.sqrt(L2);
       const b0x = b0[0] - a0[0], b0y = b0[1] - a0[1], L0 = Math.hypot(b0x, b0y);
       const x0 = Math.max(0, Math.floor(Math.min(a[0], b[0]) - r)), x1 = Math.min(W - 1, Math.ceil(Math.max(a[0], b[0]) + r));
@@ -669,11 +727,11 @@ function render(view, T, full = true) {
           const side = L > 1e-3 ? (ox * -by + oy * bx) / L : ox;   // 帶號橫向距離
           tt[i] = side / rr;
           const nx = L0 > 1e-3 ? -b0y / L0 : 1, ny = L0 > 1e-3 ? b0x / L0 : 0;
-          rx[i] = a0[0] + h * b0x + nx * side; ry[i] = a0[1] + h * b0y + ny * side; fx[i] = view === 'front' ? rx[i] : s.A[0] + h * (s.B[0] - s.A[0]);
+          rx[i] = a0[0] + h * b0x + nx * side; ry[i] = a0[1] + h * b0y + ny * side; fx[i] = view === 'front' ? rx[i] : RA[0] + h * (RB[0] - RA[0]);
         }
       }
     } else {
-      const sf = softOf(s), C = sf ? add(toWorld(T, s.bone, s.C), sf.d) : toWorld(T, s.bone, s.C), R = T.R[s.bone];
+      const sf = softOf(s), C = s.world ? s.C : sf ? add(toWorld(T, s.bone, s.C), sf.d) : toWorld(T, s.bone, s.C), R = T.R[s.bone];
       // 體積守恆的伸縮：往下晃時變高變窄，往上時變矮變寬（k·(1/√k)² = 1）
       const kq = sf ? Math.min(1.25, Math.max(0.8, 1 + 0.05 * sf.d[1])) : 1, SR = sf ? [s.r[0] / Math.sqrt(kq), s.r[1] * kq, s.r[2] / Math.sqrt(kq)] : s.r;
       const c2 = V.proj(C), dc = V.depth(C), r = Math.max(...SR);
@@ -694,7 +752,7 @@ function render(view, T, full = true) {
           const u = mtv(R, sub(Hw, C));                         // 靜止姿勢下的局部偏移
           const n = mv(R, u.map((v, k) => v / (SR[k] * SR[k])));
           tt[i] = V.sx(n) / Math.hypot(...n);
-          const restP = add(s.C, u), rp = V.proj(restP);
+          const restP = s.world ? add(s.RC, u.map((v, k) => v * s.Rr[k] / s.r[k])) : add(s.C, u), rp = V.proj(restP);   // 布料切片：貼圖跟著伸縮
           rx[i] = rp[0]; ry[i] = rp[1]; fx[i] = restP[0];
           rest[i] = u;
         }
@@ -826,7 +884,7 @@ function draw(view, T) {
     }
   }
 }
-const drawAll = () => { const T = fk(state.pose, $('t-ground').checked); if (BODY === 'anime') physPrep(T); draw('front', T); draw('side', T); };
+const drawAll = () => { const T = fk(state.pose, $('t-ground').checked); if (PHYS.parts.length && PHYS.owner === BODY) physPrep(T); draw('front', T); draw('side', T); };
 
 // ---------- 控制台 ----------
 function buildPanel() {
@@ -1395,7 +1453,7 @@ function silStats(pose) {
   return {iouF: out.front, iouS: out.side, mean: 0, max: 0, pmean: 0, pmax: 0, e: DOFS.map(() => 0)};
 }
 function setBody(kind) {
-  buildBody(kind); $('phys-bar').hidden = kind !== 'anime';
+  buildBody(kind); $('phys-bar').hidden = !PHYS.parts.length;
   document.querySelectorAll('[data-body]').forEach(x => x.setAttribute('aria-pressed', x.dataset.body === kind));
   state.target = null; state.pose = {...PRESETS['立正']}; syncSliders(); updateFitUI('尚未設定目標');
   $('errtbl').innerHTML = ''; $('cmptbl').innerHTML = '';
@@ -1668,7 +1726,7 @@ $('tl-play').onclick = () => {
   TL.stride = tlStride(); state.rootZ = 0;
   TL.timer = setInterval(() => {
     const prev = TL.cur, next = (prev + 1) % TL.n;
-    if ($('tl-follow').checked && TL.stride && next) { state.rootZ += TL.stride.per[prev]; if (state.rootZ > 24) { state.rootZ -= 48; if (BODY === 'anime') PHYS.fresh = true; } }   // 出框就繞回來
+    if ($('tl-follow').checked && TL.stride && next) { state.rootZ += TL.stride.per[prev]; if (state.rootZ > 24) { state.rootZ -= 48; if (PHYS.parts.length) PHYS.fresh = true; } }   // 出框就繞回來
     tlShow(next);
   }, 1000 / (+$('tl-fps').value || 10));
 };
@@ -1678,12 +1736,12 @@ $('tl-export').onclick = async () => {
   tlStop(); stopAnim(); stopPlay();
   const n = TL.n, fps = +$('tl-fps').value || 10, sheet = document.createElement('canvas'); sheet.width = W * n; sheet.height = H * 2;
   const sc = sheet.getContext('2d'); state.exporting = true; const keepZ = state.rootZ; state.rootZ = 0;
-  if (BODY === 'anime') PHYS.fresh = true;
+  if (PHYS.parts.length) PHYS.fresh = true;
   softReset();
   for (let f = 0; f < n; f++) {
     state.pose = tlPose(f); const T = fk(state.pose, $('t-ground').checked);
     if ($('t-soft').checked) softStep(T, 1 / fps);   // 軟組織也照每秒格數逐格推進
-    if (BODY === 'anime') { if (PHYS.fresh) physPrep(T); else for (let k = 0; k < 4; k++) physStep(T, 1 / fps / 4, physOpt()); }
+    if (PHYS.parts.length) { if (PHYS.fresh) { physPrep(T); PHYS.prevPose = {...state.pose}; } else physAdvance(state.pose, 1 / fps); }
     draw('front', T); sc.drawImage(off, f * W, 0);
     draw('side', T); sc.drawImage(off, f * W, H);
   }
@@ -2190,6 +2248,16 @@ function buildPhotoBody() {
   if (SD) { photoSideDepth(SD); PHB.MS = SD.M; PHB.CS = SD.C; }
   SHAPES.forEach((sh, i) => sh.id = i);
   refinePhotoBody();
+  // 裙子切片 → 布料：每片切片配一圈質點（中心、左右半寬、前後半深都已用照片量好、微調過）
+  // 布料從「腰部」開始：髖關節上方那片骨盆切片當固定的第一圈，接著髖部銜接切片，再接裙子
+  // （若從髖關節下方才開始，大腿一抬就從上方越過裙子，把布料壓在底下）
+  const hipY = J('pelvis')[1], pel = SHAPES.filter(sh => sh.kind === 'ell' && sh.bone === IDX.pelvis && !sh.skirt);
+  // 固定圈 = 綁在骨盆上「最高」的那一片（腰部，比髖關節高出一截），其餘骨盆切片都當布料
+  const pelS = pel.sort((a, b) => a.C[1] - b.C[1]);
+  const sk = [...pelS, ...SHAPES.filter(sh => sh.skirt).sort((a, b) => a.C[1] - b.C[1])];
+  if (SHAPES.some(sh => sh.skirt) && sk.length >= 3) {
+    physInitPhotoCloth(sk);
+  }
 }
 // 微調：量完的初值再用坐標下降，直接讓正面輪廓 IoU 最大。
 // 每個形狀兩個參數：寬度（橢球 x 半徑／膠囊半徑）與左右位置；步長 1 → 0.5 px，確定性
